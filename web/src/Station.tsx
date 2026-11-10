@@ -7,6 +7,7 @@ import { bindMediaKeys, bindPlay, setNowPlaying } from "./mediaSession";
 import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
+import { bpmFor, setBeatSource } from "./Backdrop";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -221,6 +222,20 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   }, [tuned, snap?.now?.id]);
 
   useEffect(() => () => setNowPlaying(null), []);
+
+  // The backdrop pulses on the station clock, and only while the player is really playing (never while paused or blocked).
+  useEffect(() => {
+    if (!tuned) return;
+    setBeatSource(() => {
+      const conn = connRef.current;
+      const now = latestRef.current?.now;
+      // syncRef is created in onReady, so its presence means the player's methods exist.
+      if (!syncRef.current || !conn || !now || !conn.clockSynced()) return null;
+      if (playerRef.current?.getPlayerState() !== window.YT!.PlayerState.PLAYING) return null;
+      return ((Date.now() + conn.offsetMs() - now.startedAtMs) / 60000) * bpmFor(now.videoId);
+    });
+    return () => setBeatSource(null);
+  }, [tuned]);
 
   useEffect(() => {
     if (!tuned) return;

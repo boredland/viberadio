@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { InstallBar, isStandalone, lastStation, rememberStation } from "./pwa";
 import { Share } from "./Share";
 import { Station } from "./Station";
-import { MatrixRain, Win } from "./ui";
+import { Win } from "./ui";
+import { Backdrop } from "./Backdrop";
 
 const LOGO = String.raw`
  __   _____ ___ ___ ___    _   ___ ___ ___
@@ -49,7 +50,7 @@ export function App() {
 
   return (
     <>
-      <MatrixRain />
+      <Backdrop />
       {location.pathname === "/share" ? (
         <Share />
       ) : token ? (

@@ -7,8 +7,8 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#020604",
-  "theme_color": "#020604",
+  "background_color": "#06000f",
+  "theme_color": "#06000f",
   "categories": ["music", "entertainment"],
   "share_target": {
     "action": "/share",

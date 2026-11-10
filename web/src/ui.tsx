@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** A Winamp-style window: striped title bar over a bevelled body. */
 export function Win({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
@@ -101,50 +101,4 @@ export function Visualizer({ active }: { active: boolean }) {
   }, []);
 
   return <canvas className="viz" ref={canvas} width={160} height={50} aria-hidden />;
-}
-
-const GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄ0123456789<>/\\{}[]=+*#$%";
-
-/** Faint falling-glyph backdrop; skipped entirely for reduced-motion users. */
-export function MatrixRain() {
-  const canvas = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const el = canvas.current;
-    const ctx = el?.getContext("2d");
-    if (!el || !ctx || reducedMotion()) return;
-    const size = 16;
-    let drops: number[] = [];
-    const resize = () => {
-      el.width = window.innerWidth;
-      el.height = window.innerHeight;
-      drops = Array.from({ length: Math.ceil(el.width / size) }, () => Math.random() * -50);
-    };
-    resize();
-    window.addEventListener("resize", resize);
-
-    let raf = 0;
-    let last = 0;
-    const frame = (t: number) => {
-      raf = requestAnimationFrame(frame);
-      if (t - last < 60) return;
-      last = t;
-      ctx.fillStyle = "rgba(2, 6, 4, 0.12)";
-      ctx.fillRect(0, 0, el.width, el.height);
-      ctx.fillStyle = "#00ff66";
-      ctx.font = `${size}px ui-monospace, Menlo, monospace`;
-      for (let i = 0; i < drops.length; i++) {
-        ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * size, drops[i] * size);
-        if (drops[i] * size > el.height && Math.random() > 0.975) drops[i] = 0;
-        drops[i] += 1;
-      }
-    };
-    raf = requestAnimationFrame(frame);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
-    };
-  }, []);
-
-  return <canvas className="rain" ref={canvas} aria-hidden />;
 }

@@ -1,5 +1,5 @@
 :root {
-  --bg: #020604;
+  --bg: #06000f;
   --panel: #14181d;
   --panel-hi: #2b323b;
   --panel-lo: #07090b;
@@ -19,7 +19,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(ellipse 90% 55% at 50% 0%, #07240f 0%, rgba(2, 6, 4, 0) 70%) fixed, var(--bg);
+  background: var(--bg);
   color: var(--text);
   font: 14px/1.45 var(--mono);
   display: flex;
@@ -38,13 +38,13 @@ body::after {
   background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, 0.18) 2px 3px);
 }
 
-.rain {
+/* Painted by Backdrop.tsx; behind the stack (z-index 1) and under the scanlines. */
+.backdrop {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
   z-index: 0;
-  opacity: 0.22;
   pointer-events: none;
 }
 
