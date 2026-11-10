@@ -189,6 +189,9 @@ export class Station extends DurableObject<Env> {
         await this.advance(msg.id);
         return;
       }
+      case "remove":
+        if (typeof msg.id === "string") await this.remove(msg.id);
+        return;
     }
   }
 
@@ -239,6 +242,25 @@ export class Station extends DurableObject<Env> {
     if (this.advanceLock) return this.advanceLock;
     if (!cur || (trackId !== null && cur.id !== trackId)) return;
     await this.start(cur.videoId);
+  }
+
+  /**
+   * Removes a track everywhere it would play from. The library row is marked dead (not deleted) so history rotation
+   * skips it, the backfill upsert cannot resurrect it, and re-posting the link revives it, like an unplayable video.
+   * Every queued copy goes too: the intent is "this video should not be on the radio", not "this one slot".
+   * Web-add event ids are forgotten as well: they dedupe by content for 30 s, which would otherwise swallow a re-add made
+   * right after fixing a mistake. Slack event ids stay, since a re-post is a new event and redelivery must still dedupe.
+   */
+  private async remove(id: string): Promise<void> {
+    const s = this.st();
+    const target = s.current?.id === id ? s.current : s.queue.find((t) => t.id === id);
+    if (!target) return;
+    this.ctx.storage.sql.exec("UPDATE library SET dead=1 WHERE video_id=?", target.videoId);
+    s.queue = s.queue.filter((t) => t.videoId !== target.videoId);
+    s.seenEventIds = s.seenEventIds.filter((e) => !e.startsWith("web-"));
+    await this.persist();
+    if (s.current?.id === id) await this.advance(id);
+    else this.broadcast();
   }
 
   private async unfreeze(): Promise<void> {

@@ -26,4 +26,6 @@ export type ClientMessage =
   | { type: "ping"; t0: number }
   | { type: "next" }
   | { type: "ended"; id: string }
-  | { type: "error"; id: string; code: number };
+  | { type: "error"; id: string; code: number }
+  /** Drops a track (by Track.id) from the queue and from history rotation; skips it if it is playing. */
+  | { type: "remove"; id: string };

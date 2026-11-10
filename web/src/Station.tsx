@@ -8,6 +8,8 @@ import { forgetStation } from "./pwa";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
+const API_RETRY_MS = 5000;
+const CONFIRM_MS = 4000;
 /** Page misconfiguration (missing Referer / client identity), not a bad video: must never skip tracks for everyone. */
 const ERR_CONFIG = 153;
 
@@ -28,6 +30,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const [tuned, setTuned] = useState(false);
   const [apiReady, setApiReady] = useState(youTubeApiReady());
   const [connected, setConnected] = useState(true);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [apiRetry, setApiRetry] = useState(0);
   const [volume, setVolume] = useState(80);
   const [muted, setMuted] = useState(false);
   const [unmuteChip, setUnmuteChip] = useState(false);
@@ -77,13 +81,29 @@ export function Station({ token, online }: { token: string; online: boolean }) {
     if (online && loadFailed && valid === null) setAttempt((n) => n + 1);
   }, [online]);
 
-  // The station can load while the YouTube script did not (flaky network): dial that again as soon as we are online.
+  // The station can load while the YouTube script did not (flaky network, stalled request): dial that again. A failed
+  // attempt re-arms itself on a timer, because nothing else changes (we are still online) to re-run this effect.
   useEffect(() => {
     if (!online || apiReady) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     loadYouTubeApi()
-      .then(() => setApiReady(true))
-      .catch(() => {});
-  }, [online, apiReady]);
+      .then(() => !cancelled && setApiReady(true))
+      .catch(() => {
+        if (!cancelled) timer = setTimeout(() => setApiRetry((n) => n + 1), API_RETRY_MS);
+      });
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [online, apiReady, apiRetry]);
+
+  // An armed remove button disarms itself, so a stray tap earlier cannot turn a later tap into a removal.
+  useEffect(() => {
+    if (!confirmId) return;
+    const t = setTimeout(() => setConfirmId(null), CONFIRM_MS);
+    return () => clearTimeout(t);
+  }, [confirmId]);
 
   useEffect(
     () => () => {
@@ -256,6 +276,26 @@ export function Station({ token, online }: { token: string; online: boolean }) {
         : "Nothing playable right now — post a YouTube link in the channel.";
   const ticker = now ? `${now.title} — ${now.author}` : tuned ? emptyMsg : "PRESS TUNE IN TO START";
 
+  /** Two taps: any listener can remove for everyone, so the first tap only arms the button. Needs the socket. */
+  const removeButton = (id: string, title: string) => {
+    if (!tuned) return null;
+    const armed = confirmId === id;
+    return (
+      <button
+        className={armed ? "x armed" : "x"}
+        disabled={!connected}
+        aria-label={armed ? `Confirm removing ${title}` : `Remove ${title}`}
+        onClick={() => {
+          if (!armed) return setConfirmId(id);
+          connRef.current?.send({ type: "remove", id });
+          setConfirmId(null);
+        }}
+      >
+        {armed ? "REMOVE?" : "✕"}
+      </button>
+    );
+  };
+
   return (
     <main className="stack">
       <Win title="VIBERADIO">
@@ -342,6 +382,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                   {now.title} <small>— {now.author}</small>
                 </span>
                 <span className="d">{duration > 0 ? fmtLcd(duration * 1000) : ""}</span>
+                {removeButton(now.id, now.title)}
               </li>
             )}
             {snap?.queue.map((t, i) => (
@@ -350,6 +391,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                 <span className="t">
                   {t.title} <small>— {t.author}</small>
                 </span>
+                {removeButton(t.id, t.title)}
               </li>
             ))}
           </ol>

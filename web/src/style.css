@@ -272,6 +272,22 @@ input[type="range"]::-moz-range-thumb {
 .playlist li.current small { color: #8fe0ae; }
 .playlist .d { flex: none; color: var(--green-dim); font-variant-numeric: tabular-nums; }
 
+.playlist .x {
+  flex: none;
+  margin-left: 4px;
+  min-width: 26px;
+  padding: 0 6px;
+  font: 700 13px/20px var(--mono);
+  color: #9bd8b2;
+  background: #0d1a12;
+  border: 1px solid #1c3a28;
+  cursor: pointer;
+}
+.playlist .x:hover:not(:disabled) { color: var(--amber); border-color: #5a3000; }
+.playlist .x.armed { color: #000; background: var(--amber); border-color: var(--amber); letter-spacing: 0.06em; }
+.playlist .x:disabled { opacity: 0.35; cursor: default; }
+.playlist .x:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+
 /* ---- landing ---- */
 .boot { margin: 0; white-space: pre-wrap; color: var(--green); text-shadow: 0 0 6px rgba(0, 255, 102, 0.5); font-size: 12px; }
 .boot b { color: #eafff1; font-weight: 700; }
