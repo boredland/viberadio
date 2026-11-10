@@ -97,10 +97,11 @@ function paint(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, b
   ctx.fillRect(0, hy, w, h - hy);
 
   const boost = 1 + 0.9 * pulse;
-  // Rows travel toward the viewer one row per four beats; the wrap lands on an identical frame, so there is no jump.
+  // Rows travel toward the viewer one row per four beats. One extra row is drawn past the bottom edge, so the row that
+  // wraps back in at the horizon (hidden under the horizon line) and the one leaving at the bottom never pop on screen.
   const drift = beat === null ? (t / 9000) % 1 : (((beat / 4) % 1) + 1) % 1;
   ctx.lineWidth = 1.5;
-  for (let i = 0; i < GRID_ROWS; i++) {
+  for (let i = 0; i <= GRID_ROWS; i++) {
     const z = (i + drift) / GRID_ROWS;
     const ry = hy + (h - hy) * z * z;
     ctx.strokeStyle = `rgba(255,80,210,${Math.min(1, (0.12 + 0.6 * z) * boost)})`;
