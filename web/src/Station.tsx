@@ -3,6 +3,7 @@ import type { StateMessage } from "../../shared/protocol";
 import { createPlayer, loadYouTubeApi, youTubeApiReady } from "./player";
 import { connect, PlayerSync, type Connection } from "./sync";
 import { Marquee, Visualizer, Win } from "./ui";
+import { bindMediaKeys, bindPlay, setNowPlaying } from "./mediaSession";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -30,6 +31,7 @@ export function Station({ token }: { token: string }) {
   const [muted, setMuted] = useState(false);
   const [unmuteChip, setUnmuteChip] = useState(false);
   const [configError, setConfigError] = useState(false);
+  const [needsTap, setNeedsTap] = useState(false);
   const [, setTick] = useState(0);
 
   const hostRef = useRef<HTMLDivElement>(null);
@@ -72,6 +74,7 @@ export function Station({ token }: { token: string }) {
       sync?.checkDrift();
       const overdue = sync?.takePendingEndId();
       if (overdue) connRef.current?.send({ type: "ended", id: overdue });
+      if (sync) setNeedsTap(sync.resumeIfPaused());
     };
     const onVisible = () => document.visibilityState === "visible" && check();
     const drift = setInterval(check, DRIFT_TICK_MS);
@@ -87,6 +90,8 @@ export function Station({ token }: { token: string }) {
   const tuneIn = useCallback(() => {
     if (!hostRef.current || !youTubeApiReady()) return;
     setTuned(true);
+    // The video window is display:none until React re-renders; a hidden iframe can be refused playback, so expand it first.
+    hostRef.current.closest(".win")?.classList.remove("collapsed");
     const host = document.createElement("div");
     hostRef.current.appendChild(host);
 
@@ -110,7 +115,14 @@ export function Station({ token }: { token: string }) {
         syncRef.current = new PlayerSync(player, conn.offsetMs, conn.clockSynced);
         if (latestRef.current) syncRef.current.apply(latestRef.current);
       },
-      onPlaying: () => syncRef.current?.markPlaying(),
+      onPlaying: () => {
+        syncRef.current?.markPlaying();
+        setNeedsTap(false);
+      },
+      onPaused: () => {
+        const sync = syncRef.current;
+        if (sync) setNeedsTap(sync.resumeIfPaused());
+      },
       onEnded: () => {
         const id = syncRef.current?.endedId();
         if (id) conn.send({ type: "ended", id });
@@ -143,6 +155,27 @@ export function Station({ token }: { token: string }) {
     setMuted(!muted);
     setUnmuteChip(false);
   };
+
+  /** A tap is the gesture the autoplay policy needs, so this resumes where the silent retries gave up. */
+  const resumeByTap = useCallback(() => {
+    syncRef.current?.resumeIfPaused(true);
+    setNeedsTap(false);
+  }, []);
+
+  useEffect(() => {
+    if (!tuned) return;
+    setNowPlaying(snap?.now ?? null);
+  }, [tuned, snap?.now?.id]);
+
+  useEffect(() => {
+    if (!tuned) return;
+    const offNext = bindMediaKeys(() => connRef.current?.send({ type: "next" }));
+    const offPlay = bindPlay(resumeByTap);
+    return () => {
+      offNext();
+      offPlay();
+    };
+  }, [tuned, resumeByTap]);
 
   if (valid === null)
     return (
@@ -236,6 +269,11 @@ export function Station({ token }: { token: string }) {
             {unmuteChip && (
               <button className="btn amber" onClick={toggleMute}>
                 TAP TO UNMUTE
+              </button>
+            )}
+            {needsTap && (
+              <button className="btn amber" onClick={resumeByTap}>
+                ▶ TAP TO RESUME
               </button>
             )}
           </div>

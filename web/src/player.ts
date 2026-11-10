@@ -19,6 +19,8 @@ export function youTubeApiReady(): boolean {
 export type PlayerHandlers = {
   onReady: () => void;
   onPlaying: () => void;
+  /** The listener has no pause control, so this is the browser or OS pausing the player (background, lock, audio focus). */
+  onPaused: () => void;
   onEnded: () => void;
   onError: (code: number) => void;
   onAutoplayBlocked: () => void;
@@ -36,6 +38,7 @@ export function createPlayer(host: HTMLElement, h: PlayerHandlers): YT.Player {
       onStateChange: (e) => {
         const state = window.YT!.PlayerState;
         if (e.data === state.PLAYING) h.onPlaying();
+        if (e.data === state.PAUSED) h.onPaused();
         if (e.data === state.ENDED) h.onEnded();
       },
       onError: (e) => h.onError(e.data),
