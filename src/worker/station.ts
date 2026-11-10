@@ -83,6 +83,19 @@ export class Station extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now());
   }
 
+  /**
+   * Backfill failures are terminal (`not_in_channel`, `invalid_auth` never fix themselves), so a station created before
+   * the bot could read the channel stays empty. The bot joining is the moment that changes, so retry then.
+   */
+  async rearmBackfill(): Promise<void> {
+    const s = this.state;
+    if (!s || s.backfill.error === null) return;
+    s.backfill = { cursor: null, done: false, error: null };
+    await this.persist();
+    await this.ctx.storage.setAlarm(Date.now());
+    this.broadcast();
+  }
+
   async enqueue(
     teamId: string,
     channelId: string,

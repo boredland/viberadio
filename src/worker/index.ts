@@ -56,7 +56,9 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   if (event.type === "member_joined_channel") {
     if (event.user !== body.authorizations?.[0]?.user_id) return;
     const { token } = await registry(env).ensureStation(teamId, channel);
-    await env.STATION.getByName(token).init(teamId, channel);
+    const station = env.STATION.getByName(token);
+    await station.init(teamId, channel);
+    await station.rearmBackfill();
     await announce(env, origin, channel, token);
     return;
   }
