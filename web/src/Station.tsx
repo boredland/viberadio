@@ -4,6 +4,7 @@ import { createPlayer, loadYouTubeApi, youTubeApiReady } from "./player";
 import { connect, PlayerSync, type Connection } from "./sync";
 import { Marquee, Visualizer, Win } from "./ui";
 import { bindMediaKeys, bindPlay, setNowPlaying } from "./mediaSession";
+import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
 
@@ -49,6 +50,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const latestRef = useRef<StateMessage | null>(null);
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
+  const keepAwake = useKeepAwake(tuned);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,6 +365,16 @@ export function Station({ token, online }: { token: string; online: boolean }) {
             {needsTap && (
               <button className="btn amber" onClick={resumeByTap}>
                 ▶ TAP TO RESUME
+              </button>
+            )}
+            {keepAwake.supported && (
+              <button
+                className="btn"
+                onClick={keepAwake.toggle}
+                aria-pressed={keepAwake.wanted}
+                title="Stops the screen from turning off so the player keeps playing. Uses more battery."
+              >
+                {keepAwake.wanted ? (keepAwake.active ? "SCREEN ON ✓" : "SCREEN ON …") : "KEEP SCREEN ON"}
               </button>
             )}
           </div>
