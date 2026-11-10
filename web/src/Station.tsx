@@ -21,7 +21,7 @@ function fmtLcd(ms: number): string {
   return h > 0 ? `${h}:${pad2(m)}:${pad2(s % 60)}` : `${pad2(m)}:${pad2(s % 60)}`;
 }
 
-export function Station({ token }: { token: string }) {
+export function Station({ token, online }: { token: string; online: boolean }) {
   const [valid, setValid] = useState<boolean | null>(null);
   const [snap, setSnap] = useState<StateMessage | null>(null);
   const [tuned, setTuned] = useState(false);
@@ -33,6 +33,8 @@ export function Station({ token }: { token: string }) {
   const [configError, setConfigError] = useState(false);
   const [needsTap, setNeedsTap] = useState(false);
   const [, setTick] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YT.Player | null>(null);
@@ -44,20 +46,29 @@ export function Station({ token }: { token: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    setLoadFailed(false);
     fetch(`/api/station/${encodeURIComponent(token)}`)
       .then(async (r) => {
         if (cancelled) return;
-        if (!r.ok) return setValid(false);
+        // Only a definite 404 means the link is bad; any other failure is transient and must not look like one.
+        if (r.status === 404) return setValid(false);
+        if (!r.ok) return setLoadFailed(true);
         setSnap((await r.json()) as StateMessage);
         setValid(true);
       })
-      .catch(() => !cancelled && setValid(false));
+      .catch(() => !cancelled && setLoadFailed(true));
     // Preloaded so the Tune in click can build the player synchronously (autoplay needs the user gesture's call stack).
     loadYouTubeApi().then(() => !cancelled && setApiReady(true));
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, attempt]);
+
+  // Retry once when connectivity returns. Keyed on `online` alone: keying on loadFailed too would retry in a tight loop
+  // against a server that is reachable but failing.
+  useEffect(() => {
+    if (online && loadFailed && valid === null) setAttempt((n) => n + 1);
+  }, [online]);
 
   useEffect(
     () => () => {
@@ -187,7 +198,21 @@ export function Station({ token }: { token: string }) {
     return (
       <main className="stack">
         <Win title="VIBERADIO">
-          <p className="lcd-text">LOADING<span className="blink">_</span></p>
+          {loadFailed ? (
+            <>
+              <p className="lcd-text err">NO SIGNAL</p>
+              <p className="dim">
+                {online ? "Can't reach the station. Retrying…" : "You're offline. This will reconnect when you're back online."}
+              </p>
+              <button className="btn" onClick={() => setAttempt((n) => n + 1)}>
+                RETRY
+              </button>
+            </>
+          ) : (
+            <p className="lcd-text">
+              LOADING<span className="blink">_</span>
+            </p>
+          )}
         </Win>
       </main>
     );
