@@ -16,9 +16,9 @@ type StationState = {
   queue: Track[];
   /** Last history row played. */
   rotationCursor: { ts: string; seq: number } | null;
-  backfill: { cursor: string | null; done: boolean; error: string | null };
+  backfill: { cursor: string | null; done: boolean; error: string | null; failures?: number };
   /** One-off pass that fills in posters on rows indexed before attribution existed; absent when not running. */
-  refill?: { cursor: string | null };
+  refill?: { cursor: string | null; failures?: number };
   /** Set once the pass has finished (or was never owed: the station was created after attribution existed). */
   attributionDone?: boolean;
   /** Ring buffer, cap SEEN_CAP. */
@@ -55,6 +55,18 @@ const SEEN_CAP = 500;
 const MAX_ROWS_EXAMINED = 20;
 const BACKFILL_PAGE_DELAY_MS = 1500;
 const BACKFILL_DEFAULT_RETRY_S = 60;
+/** Slack errors that retrying cannot fix. */
+const PERMANENT_HISTORY_ERRORS = new Set([
+  "not_in_channel",
+  "channel_not_found",
+  "missing_scope",
+  "invalid_auth",
+  "account_inactive",
+  "token_revoked",
+  "is_archived",
+]);
+/** Failed history pages (error answers, non-JSON bodies, thrown reads) tolerated in a row before a pass gives up. */
+const MAX_HISTORY_FAILURES = 8;
 const FATAL_PLAYER_ERRORS = new Set([100, 101, 150]);
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 // Short: fetchVideoMeta returns null for any failure, so a transient error must not hide a title for long.
@@ -96,8 +108,9 @@ export class Station extends DurableObject<Env> {
         s.refill = { cursor: null };
         await ctx.storage.put("state", s);
         await ctx.storage.setAlarm(Date.now());
-      } else if (s?.refill) {
-        // An unfinished pass whose alarm was lost (e.g. a throw before the retry logic existed) is resumed.
+      } else if (s?.refill && (await ctx.storage.getAlarm()) === null) {
+        // An unfinished pass with no alarm pending is resumed. If one is pending (a 429 wait, a retry) it is left alone:
+        // overwriting it with "now" on every wake-up would ignore Slack's Retry-After.
         await ctx.storage.setAlarm(Date.now());
       }
     });
@@ -489,7 +502,7 @@ export class Station extends DurableObject<Env> {
    * Either way a retry alarm is already set, so callers just stop. Letting a throw escape alarm() would leave the pass
    * without an alarm if the runtime does not retry it, and nothing would ever resume it.
    */
-  private async readHistoryPage(s: StationState, cursor: string | null) {
+  private async readHistoryPage(s: StationState, cursor: string | null, pass: { failures?: number }) {
     try {
       const res = await slackApi("conversations.history", this.env.SLACK_BOT_TOKEN, {
         channel: s.channelId,
@@ -501,26 +514,40 @@ export class Station extends DurableObject<Env> {
         await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
         return null;
       }
-      return (await res.json()) as {
+      const body = (await res.json()) as {
         ok: boolean;
         error?: string;
         messages?: SlackMessage[];
         has_more?: boolean;
         response_metadata?: { next_cursor?: string };
       };
+      if (body.ok) pass.failures = 0;
+      return body;
     } catch (err) {
       console.error("conversations.history threw:", err);
-      await this.ctx.storage.setAlarm(Date.now() + BACKFILL_DEFAULT_RETRY_S * 1000);
-      return null;
+      // Bounded like an ok:false answer: a persistently non-JSON 5xx must not retry every minute forever.
+      if (await this.noteHistoryFailure(pass)) return null;
+      return { ok: false as const, error: "unreachable" };
     }
   }
 
+  /** Counts a failed page and schedules a retry. Returns false once the budget is spent, so the caller ends the pass. */
+  private async noteHistoryFailure(pass: { failures?: number }): Promise<boolean> {
+    pass.failures = (pass.failures ?? 0) + 1;
+    if (pass.failures >= MAX_HISTORY_FAILURES) return false;
+    await this.ctx.storage.setAlarm(Date.now() + BACKFILL_DEFAULT_RETRY_S * 1000);
+    await this.persist();
+    return true;
+  }
+
   private async runBackfill(s: StationState): Promise<void> {
-    const body = await this.readHistoryPage(s, s.backfill.cursor);
+    const body = await this.readHistoryPage(s, s.backfill.cursor, s.backfill);
     if (!body) return;
     if (!body.ok) {
-      // not_in_channel / missing_scope do not fix themselves; live links still work.
+      // Permanent errors do not fix themselves (live links still work). Anything else retries, bounded so a persistent
+      // failure still ends the pass instead of leaving "Indexing…" up forever.
       console.error("conversations.history failed:", body.error);
+      if (!PERMANENT_HISTORY_ERRORS.has(body.error ?? "") && (await this.noteHistoryFailure(s.backfill))) return;
       s.backfill = { cursor: null, done: true, error: body.error ?? "unknown_error" };
     } else {
       for (const m of body.messages ?? []) {
@@ -528,10 +555,13 @@ export class Station extends DurableObject<Env> {
         extractVideoIds(m.text ?? "").forEach((videoId, seq) => {
           // Newest-first pages: a video posted twice is seen newest first, so the older post overwrites when it arrives.
           // The poster travels with the earliest post, matching `first_ts`, so "who added it" means who first did.
+          // The `=` arm is for rows a live post created before attribution existed: same message, so same first_ts, but no
+          // poster. A strict `<` alone would skip them, and finishing the backfill marks attribution done.
           this.ctx.storage.sql.exec(
             `INSERT INTO library(video_id, first_ts, seq, added_by_id) VALUES (?,?,?,?)
              ON CONFLICT(video_id) DO UPDATE SET first_ts=excluded.first_ts, seq=excluded.seq, added_by_id=excluded.added_by_id, added_by=NULL
-             WHERE excluded.first_ts < library.first_ts`,
+             WHERE excluded.first_ts < library.first_ts
+                OR (excluded.first_ts = library.first_ts AND library.added_by_id IS NULL AND excluded.added_by_id IS NOT NULL)`,
             videoId,
             m.ts,
             seq,
@@ -560,10 +590,13 @@ export class Station extends DurableObject<Env> {
    * `backfill.done`, still true) never pauses.
    */
   private async runRefill(s: StationState): Promise<void> {
-    const body = await this.readHistoryPage(s, s.refill?.cursor ?? null);
+    const pass = s.refill ?? { cursor: null };
+    const body = await this.readHistoryPage(s, pass.cursor, pass);
     if (!body) return;
     if (!body.ok) {
       console.error("refill: conversations.history failed:", body.error);
+      // A transient error retries within its budget; a spent budget or a permanent one ends the pass for good.
+      if (!PERMANENT_HISTORY_ERRORS.has(body.error ?? "") && (await this.noteHistoryFailure(pass))) return;
       delete s.refill;
       s.attributionDone = true;
     } else {
@@ -581,7 +614,7 @@ export class Station extends DurableObject<Env> {
       }
       const next = body.response_metadata?.next_cursor;
       if (body.has_more && next) {
-        s.refill = { cursor: next };
+        s.refill = { cursor: next, failures: 0 };
         await this.ctx.storage.setAlarm(Date.now() + BACKFILL_PAGE_DELAY_MS);
       } else {
         delete s.refill;
