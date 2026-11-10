@@ -1,15 +1,28 @@
 let apiPromise: Promise<void> | null = null;
 
-/** Loads the IFrame API script once. Safe to call early to preload. */
+/**
+ * Loads the IFrame API script once. Safe to call early to preload.
+ * A failed load (offline start) is not cached: the next call dials again, so the page can recover when the network
+ * returns without a manual reload.
+ */
 export function loadYouTubeApi(): Promise<void> {
-  apiPromise ??= new Promise<void>((resolve) => {
-    if (window.YT?.Player) return resolve();
+  if (window.YT?.Player) return Promise.resolve();
+  if (apiPromise) return apiPromise;
+  const attempt = new Promise<void>((resolve, reject) => {
     window.onYouTubeIframeAPIReady = () => resolve();
     const s = document.createElement("script");
     s.src = "https://www.youtube.com/iframe_api";
+    s.onerror = () => {
+      s.remove();
+      reject(new Error("YouTube iframe API failed to load"));
+    };
     document.head.appendChild(s);
   });
-  return apiPromise;
+  apiPromise = attempt;
+  attempt.catch(() => {
+    if (apiPromise === attempt) apiPromise = null;
+  });
+  return attempt;
 }
 
 export function youTubeApiReady(): boolean {

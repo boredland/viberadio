@@ -1,4 +1,5 @@
-import { extractVideoIds, isUserMessage, slackChatPost, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
+import { extractVideoIds } from "../../shared/video";
+import { isUserMessage, slackChatPost, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
 import { fetchVideoMeta } from "./youtube";
 import type { EnqueueItem } from "./station";
 
@@ -124,6 +125,42 @@ async function slackCommands(request: Request, env: Env): Promise<Response> {
   return json({ response_type: "ephemeral", text: `🎧 Tune in: ${new URL(request.url).origin}/s/${token}` });
 }
 
+/** Cap per request: each link costs an oEmbed subrequest, and the Workers Free plan allows 50 per invocation. */
+const MAX_WEB_ADD = 10;
+
+/**
+ * Adds links from the web app (the PWA share target). The station token is the capability, as for Next, so no other
+ * auth. JSON content type is required: a cross-origin page can send text/plain without a CORS preflight, but cannot
+ * send application/json without one, and this API sets no CORS headers.
+ */
+async function addFromWeb(request: Request, env: Env, token: string): Promise<Response> {
+  if (!(request.headers.get("Content-Type") ?? "").includes("application/json")) return json({ error: "bad_content_type" }, 415);
+  const info = await registry(env).lookupToken(token);
+  if (!info) return json({ error: "unknown_station" }, 404);
+  const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
+  if (typeof body?.text !== "string" || body.text.length > 10_000) return json({ error: "bad_request" }, 400);
+
+  const ids = extractVideoIds(body.text).slice(0, MAX_WEB_ADD);
+  if (ids.length === 0) return json({ error: "no_video_links" }, 422);
+
+  const metas = await Promise.all(ids.map((id) => fetchVideoMeta(id)));
+  const items: EnqueueItem[] = [];
+  const unavailable: string[] = [];
+  ids.forEach((videoId, seq) => {
+    const meta = metas[seq];
+    if (meta) items.push({ videoId, seq, ...meta });
+    else unavailable.push(videoId);
+  });
+
+  if (items.length > 0) {
+    // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.
+    const now = Date.now();
+    const ts = `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, "0")}000`;
+    await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, `web-${crypto.randomUUID()}`, ts, items);
+  }
+  return json({ added: items.map((i) => ({ videoId: i.videoId, title: i.title })), unavailable });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -132,6 +169,8 @@ export default {
     if (request.method === "POST" && pathname === "/slack/events") return slackEvents(request, env, ctx);
     if (request.method === "POST" && pathname === "/slack/commands") return slackCommands(request, env);
 
+    const add = pathname.match(/^\/api\/station\/([^/]+)\/add$/);
+    if (request.method === "POST" && add) return addFromWeb(request, env, add[1]);
     if (request.method === "GET" && pathname.startsWith("/api/station/")) {
       const token = pathname.slice("/api/station/".length);
       const info = await registry(env).lookupToken(token);

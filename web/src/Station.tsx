@@ -62,7 +62,10 @@ export function Station({ token, online }: { token: string; online: boolean }) {
       })
       .catch(() => !cancelled && setLoadFailed(true));
     // Preloaded so the Tune in click can build the player synchronously (autoplay needs the user gesture's call stack).
-    loadYouTubeApi().then(() => !cancelled && setApiReady(true));
+    // A load that failed offline is dialled again on every attempt, so TUNE IN enables once the network is back.
+    loadYouTubeApi()
+      .then(() => !cancelled && setApiReady(true))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -73,6 +76,14 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   useEffect(() => {
     if (online && loadFailed && valid === null) setAttempt((n) => n + 1);
   }, [online]);
+
+  // The station can load while the YouTube script did not (flaky network): dial that again as soon as we are online.
+  useEffect(() => {
+    if (!online || apiReady) return;
+    loadYouTubeApi()
+      .then(() => setApiReady(true))
+      .catch(() => {});
+  }, [online, apiReady]);
 
   useEffect(
     () => () => {
@@ -206,7 +217,9 @@ export function Station({ token, online }: { token: string; online: boolean }) {
             <>
               <p className="lcd-text err">NO SIGNAL</p>
               <p className="dim">
-                {online ? "Can't reach the station. Retrying…" : "You're offline. This will reconnect when you're back online."}
+                {online
+                  ? "Can't reach the station. Press RETRY."
+                  : "You're offline. This will reconnect when you're back online."}
               </p>
               <button className="btn" onClick={() => setAttempt((n) => n + 1)}>
                 RETRY

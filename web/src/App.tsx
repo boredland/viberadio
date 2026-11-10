@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { InstallBar, isStandalone, lastStation, rememberStation } from "./pwa";
+import { Share } from "./Share";
 import { Station } from "./Station";
 import { MatrixRain, Win } from "./ui";
 
@@ -39,8 +40,9 @@ export function App() {
   }, [token]);
 
   // An installed app opens on start_url ("/"); send it back to the station the listener last used.
-  // Only in standalone mode: in a browser tab "/" is the landing page and stays so.
-  const resume = !token && isStandalone() ? lastStation() : null;
+  // Only for "/" in standalone mode: other paths (notably /share, the share target) must not be redirected away, and in
+  // a browser tab "/" is the landing page and stays so.
+  const resume = location.pathname === "/" && isStandalone() ? lastStation() : null;
   useEffect(() => {
     if (resume) location.replace(`/s/${encodeURIComponent(resume)}`);
   }, [resume]);
@@ -48,7 +50,9 @@ export function App() {
   return (
     <>
       <MatrixRain />
-      {token ? (
+      {location.pathname === "/share" ? (
+        <Share />
+      ) : token ? (
         <Station token={decodeURIComponent(token)} online={online} />
       ) : resume ? null : (
         <main className="stack">

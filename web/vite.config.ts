@@ -23,8 +23,14 @@ function serviceWorker(): Plugin {
     generateBundle(_, bundle) {
       const assets = Object.keys(bundle).filter((f) => f.startsWith("assets/")).map((f) => `/${f}`);
       const precache = ["/", ...PUBLIC_SHELL, ...assets];
-      // The version changes whenever any hashed filename does, which is what makes browsers install the new worker.
-      const version = createHash("sha256").update(precache.join("\n")).digest("hex").slice(0, 12);
+      // Hashed bundle names change with their contents, but public/ files and index.html keep their URLs. Their bytes
+      // go into the version too: otherwise an icon-only or manifest-only deploy emits an identical sw.js, no new worker
+      // installs, and the cache-first handler keeps serving the old copy.
+      const hash = createHash("sha256").update(precache.join("\n"));
+      for (const url of PUBLIC_SHELL) hash.update(readFileSync(resolve(__dirname, "public", url.slice(1))));
+      const html = bundle["index.html"];
+      if (html?.type === "asset") hash.update(html.source);
+      const version = hash.digest("hex").slice(0, 12);
       const source = readFileSync(resolve(__dirname, "sw.template.js"), "utf8")
         .replace("__VERSION__", version)
         .replace("__PRECACHE__", JSON.stringify(precache));

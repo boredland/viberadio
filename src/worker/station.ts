@@ -1,7 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import type { ClientMessage, CurrentTrack, ServerMessage, StateMessage, Track } from "../../shared/protocol";
 import type { Env } from "./index";
-import { extractVideoIds, isUserMessage, slackApi, type SlackMessage } from "./slack";
+import { extractVideoIds } from "../../shared/video";
+import { isUserMessage, slackApi, type SlackMessage } from "./slack";
 import { fetchVideoMeta } from "./youtube";
 
 type StationState = {
