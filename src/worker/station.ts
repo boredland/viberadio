@@ -157,6 +157,8 @@ export class Station extends DurableObject<Env> {
     messageTs: string,
     items: EnqueueItem[],
     adder: Adder = { id: null, name: null },
+    /** Playlist videos: they join the shuffle without being queued. */
+    libraryItems: EnqueueItem[] = [],
   ): Promise<{ accepted: boolean }> {
     await this.init(teamId, channelId);
     const s = this.st();
@@ -174,31 +176,39 @@ export class Station extends DurableObject<Env> {
         source: "queue",
         addedBy: adder.name,
       });
-      // Keeps the original first_ts. Credit rule, the same as the backfill's: whoever first posted a link added it, so a
-      // re-post of a live video leaves the poster alone (otherwise the credit would depend on whether the backfill had
-      // already reached the original post). Reviving a removed video is the exception: that person brought it back.
-      this.ctx.storage.sql.exec(
-        `INSERT INTO library(video_id, first_ts, seq, title, author, thumbnail_url, dead, added_by_id, added_by) VALUES (?,?,?,?,?,?,0,?,?)
-         ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, author=excluded.author, thumbnail_url=excluded.thumbnail_url,
-           added_by_id=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by_id
-                            WHEN library.added_by_id IS NULL THEN excluded.added_by_id ELSE library.added_by_id END,
-           added_by=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by
-                         WHEN library.added_by_id IS NULL THEN excluded.added_by ELSE library.added_by END,
-           dead=0`,
-        it.videoId,
-        messageTs,
-        it.seq,
-        it.title,
-        it.author,
-        it.thumbnailUrl,
-        adder.id,
-        adder.name,
-      );
+      this.upsertLibrary(it, messageTs, adder);
     }
+    for (const it of libraryItems) this.upsertLibrary(it, messageTs, adder);
     await this.persist();
     await this.maybeStart();
     this.broadcast();
     return { accepted: true };
+  }
+
+  /**
+   * Keeps the original first_ts. Credit rule, the same as the backfill's: whoever first posted a link added it, so a
+   * re-post of a live video leaves the poster alone (otherwise the credit would depend on whether the backfill had
+   * already reached the original post). Reviving a removed video is the exception: that person brought it back.
+   * `played_cycle` is left alone, so a re-post neither resets nor skips a track's turn in the shuffle.
+   */
+  private upsertLibrary(it: EnqueueItem, messageTs: string, adder: Adder): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO library(video_id, first_ts, seq, title, author, thumbnail_url, dead, added_by_id, added_by) VALUES (?,?,?,?,?,?,0,?,?)
+       ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, author=excluded.author, thumbnail_url=excluded.thumbnail_url,
+         added_by_id=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by_id
+                          WHEN library.added_by_id IS NULL THEN excluded.added_by_id ELSE library.added_by_id END,
+         added_by=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by
+                       WHEN library.added_by_id IS NULL THEN excluded.added_by ELSE library.added_by END,
+         dead=0`,
+      it.videoId,
+      messageTs,
+      it.seq,
+      it.title,
+      it.author,
+      it.thumbnailUrl,
+      adder.id,
+      adder.name,
+    );
   }
 
   snapshot(exclude?: WebSocket): StateMessage {

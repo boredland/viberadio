@@ -2,6 +2,8 @@
 
 Synchronized YouTube radio driven by a Slack channel. Every YouTube link posted in a channel with the bot joins the rotation; everyone on the station link `/s/<token>` hears the same position. When the queue is empty, the channel's link history plays in shuffled order: every track once, then a fresh shuffle (the previous track never repeats back to back).
 
+**Playlists.** A playlist link (`/playlist?list=…`, or `/watch?list=…` with no video) adds its videos to the shuffle without queueing them. A video link that merely carries `list=` is just that video. YouTube's public feed lists at most 15 videos per playlist and says nothing about private playlists or albums (those are reported as unreadable), so longer playlists contribute their first 15.
+
 Cloudflare Workers + SQLite-backed Durable Objects (`StationRegistry`, `Station`), React frontend served from `dist`.
 
 ## Setup

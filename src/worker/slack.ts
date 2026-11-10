@@ -61,6 +61,11 @@ export function slackApi(
   });
 }
 
+/** Slack mrkdwn treats & < > as markup, so text from outside (a playlist title) must not carry them raw. */
+export function slackEscape(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** Never retried: retrying a bot message is how event storms start. */
 export async function slackChatPost(
   env: SlackEnv,

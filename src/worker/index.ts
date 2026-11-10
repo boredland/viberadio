@@ -1,7 +1,7 @@
-import { extractVideoIds } from "../../shared/video";
+import { MAX_PLAYLIST_VIDEOS, extractPlaylistIds, extractVideoIds } from "../../shared/video";
 import { WEB_ADDER, resolveSlackName } from "./names";
-import { isUserMessage, slackChatPost, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
-import { fetchVideoMeta } from "./youtube";
+import { isUserMessage, slackChatPost, slackEscape, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
+import { fetchPlaylist, fetchVideoMeta, type Playlist } from "./youtube";
 import type { EnqueueItem } from "./station";
 
 export { StationRegistry } from "./registry";
@@ -52,6 +52,41 @@ async function announce(env: Env, origin: string, channel: string, token: string
   );
 }
 
+/** Playlist links handled per message; each is one feed request, so this also bounds subrequests. */
+const MAX_PLAYLISTS = 3;
+
+type PlaylistRead = { id: string; playlist: Playlist | null };
+
+function readPlaylists(playlistIds: string[]): Promise<PlaylistRead[]> {
+  return Promise.all(playlistIds.map(async (id) => ({ id, playlist: await fetchPlaylist(id) })));
+}
+
+/**
+ * Turns feed results into library items: videos already named in the message, or by an earlier playlist, are skipped, and
+ * `seq` continues after the message's own links so their order within the message stays stable.
+ */
+function playlistItems(reads: PlaylistRead[], taken: Set<string>, seqStart: number) {
+  const items: EnqueueItem[] = [];
+  const summaries: { id: string; title: string; added: number; truncated: boolean }[] = [];
+  const failed: string[] = [];
+  let seq = seqStart;
+  for (const { id, playlist } of reads) {
+    if (!playlist || playlist.videos.length === 0) {
+      failed.push(id);
+      continue;
+    }
+    let added = 0;
+    for (const v of playlist.videos) {
+      if (taken.has(v.videoId)) continue;
+      taken.add(v.videoId);
+      items.push({ ...v, seq: seq++ });
+      added++;
+    }
+    summaries.push({ id, title: playlist.title, added, truncated: playlist.videos.length >= MAX_PLAYLIST_VIDEOS });
+  }
+  return { items, summaries, failed };
+}
+
 async function handleEvent(body: SlackEventBody, origin: string, env: Env): Promise<void> {
   const event = body.event;
   const teamId = body.team_id;
@@ -69,14 +104,16 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   }
 
   if (!isUserMessage(event) || !event.ts || !body.event_id) return;
-  const ids = extractVideoIds(event.text ?? "");
-  if (ids.length === 0) return;
+  const text = event.text ?? "";
+  const ids = extractVideoIds(text);
+  const playlistIds = extractPlaylistIds(text).slice(0, MAX_PLAYLISTS);
+  if (ids.length === 0 && playlistIds.length === 0) return;
 
   const { token, created } = await registry(env).ensureStation(teamId, channel);
   if (created) await announce(env, origin, channel, token);
 
   const threadTs = event.thread_ts ?? event.ts;
-  const metas = await Promise.all(ids.map((id) => fetchVideoMeta(id)));
+  const [metas, reads] = await Promise.all([Promise.all(ids.map((id) => fetchVideoMeta(id))), readPlaylists(playlistIds)]);
   const items: EnqueueItem[] = [];
   const unavailable: string[] = [];
   for (const [seq, videoId] of ids.entries()) {
@@ -84,17 +121,35 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
     if (meta) items.push({ videoId, seq, ...meta });
     else unavailable.push(videoId);
   }
+  const pl = playlistItems(reads, new Set(ids), ids.length);
 
   // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
   const adder = { id: event.user ?? null, name: await resolveSlackName(env, event.user) };
-  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items, adder);
+  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items, adder, pl.items);
   if (!accepted) return;
-  if (items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
+  if (items.length > 0 || pl.items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
   for (const videoId of unavailable) {
     await slackChatPost(
       env,
       channel,
       `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
+      threadTs,
+    );
+  }
+  for (const p of pl.summaries) {
+    const cap = p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} videos per playlist)` : "";
+    await slackChatPost(
+      env,
+      channel,
+      `🎶 ${p.added} ${p.added === 1 ? "video" : "videos"} from “${slackEscape(p.title)}” in the rotation${cap}`,
+      threadTs,
+    );
+  }
+  for (const id of pl.failed) {
+    await slackChatPost(
+      env,
+      channel,
+      `⚠️ Couldn't read https://www.youtube.com/playlist?list=${id} — it may be private, or an album or auto-generated playlist`,
       threadTs,
     );
   }
@@ -153,9 +208,10 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   if (typeof body?.text !== "string" || body.text.length > 10_000) return json({ error: "bad_request" }, 400);
 
   const ids = extractVideoIds(body.text).slice(0, MAX_WEB_ADD);
-  if (ids.length === 0) return json({ error: "no_video_links" }, 422);
+  const playlistIds = extractPlaylistIds(body.text).slice(0, MAX_PLAYLISTS);
+  if (ids.length === 0 && playlistIds.length === 0) return json({ error: "no_video_links" }, 422);
 
-  const metas = await Promise.all(ids.map((id) => fetchVideoMeta(id)));
+  const [metas, reads] = await Promise.all([Promise.all(ids.map((id) => fetchVideoMeta(id))), readPlaylists(playlistIds)]);
   const items: EnqueueItem[] = [];
   const unavailable: string[] = [];
   ids.forEach((videoId, seq) => {
@@ -163,8 +219,11 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
     if (meta) items.push({ videoId, seq, ...meta });
     else unavailable.push(videoId);
   });
+  const pl = playlistItems(reads, new Set(ids), ids.length);
 
-  if (items.length === 0) return json({ error: "none_playable", unavailable }, 422);
+  if (items.length === 0 && pl.items.length === 0) {
+    return json({ error: "none_playable", unavailable, playlistsFailed: pl.failed }, 422);
+  }
 
   // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.
   const now = Date.now();
@@ -174,13 +233,19 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   const window30 = Math.floor(now / 30_000);
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(`${window30}:${items.map((i) => i.videoId).join(",")}`),
+    new TextEncoder().encode(`${window30}:${items.map((i) => i.videoId).join(",")}:${playlistIds.join(",")}`),
   );
   const eventId = `web-${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
   // The share target has no identity, so it is credited to the label "web share" instead of a person.
   const adder = { id: "web", name: WEB_ADDER };
-  const { accepted } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder);
-  return json({ added: items.map((i) => ({ videoId: i.videoId, title: i.title })), unavailable, duplicate: !accepted });
+  const { accepted } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder, pl.items);
+  return json({
+    added: items.map((i) => ({ videoId: i.videoId, title: i.title })),
+    playlists: pl.summaries,
+    playlistsFailed: pl.failed,
+    unavailable,
+    duplicate: !accepted,
+  });
 }
 
 export default {
