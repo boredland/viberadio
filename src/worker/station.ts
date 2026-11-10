@@ -465,12 +465,14 @@ export class Station extends DurableObject<Env> {
           thumbnailUrl,
           row.video_id,
         );
-        // The await above let other events run: a removal during the lookup marked the row dead, and returning it now
-        // would play a video someone just removed (current is null while an advance is in flight, so removeVideo had
-        // nothing else to stop).
-        const stillAlive = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE video_id=? AND dead=0", row.video_id).one().n;
-        if (stillAlive === 0) continue;
       }
+      // Every await above (the title lookup, the name lookup) lets other events run, and `current` is null while an advance
+      // is in flight, so a removal in that window had nothing else to stop: it marks the row dead and this track would
+      // still play. So the name is resolved first and aliveness is checked last, with no await between that check and the
+      // return. (This used to run only after a title lookup, which missed the name lookup entirely.)
+      const addedBy = await this.adderName(row.video_id, row.added_by_id, row.added_by);
+      const stillAlive = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE video_id=? AND dead=0", row.video_id).one().n;
+      if (stillAlive === 0) continue;
       s.rotationCursor = cursor;
       return {
         id: `${Date.now()}-${row.video_id}`,
@@ -479,7 +481,7 @@ export class Station extends DurableObject<Env> {
         author: author ?? "",
         thumbnailUrl: thumbnailUrl ?? "",
         source: "history",
-        addedBy: await this.adderName(row.video_id, row.added_by_id, row.added_by),
+        addedBy,
       };
     }
     // Keep the position so the next call continues past the rows just examined.

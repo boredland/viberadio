@@ -313,8 +313,10 @@ input[type="range"]::-moz-range-thumb {
 .playlist small { color: #3f8a5c; font-size: 11px; }
 .playlist li.current small { color: #8fe0ae; }
 .playlist .d { flex: none; color: var(--green-dim); font-variant-numeric: tabular-nums; }
-/* Who added it: a quiet tag that gives way before the title (the title is the part that truncates). */
-.playlist .by { flex: 0 1 auto; max-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--amber); font-size: 11px; opacity: 0.85; }
+/* Who added it: a quiet tag that gives way before the title. The title is what people read, so the tag is capped as a share of
+   the row (not a fixed width) and shrinks first; the title keeps a floor of its own. */
+.playlist .by { flex: 0 1 auto; max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--amber); font-size: 11px; opacity: 0.85; }
+.playlist .t { flex: 1 1 0; min-width: 6em; }
 .playlist li.current .by { color: #ffd08a; opacity: 1; }
 .by-lcd { color: var(--amber); letter-spacing: 0.06em; }
 
@@ -351,4 +353,6 @@ input[type="range"]::-moz-range-thumb {
   .viz { width: 84px; }
   .controls { grid-template-columns: auto auto; }
   .controls .vol { grid-column: 1 / -1; }
+  /* The playing track's adder is on the LCD line; its playlist row has no room for a second copy beside the title. */
+  .playlist li.current .by { display: none; }
 }
