@@ -4,6 +4,7 @@ import { createPlayer, loadYouTubeApi, youTubeApiReady } from "./player";
 import { connect, PlayerSync, type Connection } from "./sync";
 import { Marquee, Visualizer, Win } from "./ui";
 import { bindMediaKeys, bindPlay, setNowPlaying } from "./mediaSession";
+import { forgetStation } from "./pwa";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -51,7 +52,10 @@ export function Station({ token, online }: { token: string; online: boolean }) {
       .then(async (r) => {
         if (cancelled) return;
         // Only a definite 404 means the link is bad; any other failure is transient and must not look like one.
-        if (r.status === 404) return setValid(false);
+        if (r.status === 404) {
+          forgetStation(token);
+          return setValid(false);
+        }
         if (!r.ok) return setLoadFailed(true);
         setSnap((await r.json()) as StateMessage);
         setValid(true);

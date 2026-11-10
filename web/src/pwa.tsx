@@ -64,6 +64,15 @@ export function lastStation(): string | null {
   }
 }
 
+/** Called when a station link turns out to be invalid, so the installed app does not redirect to it forever. */
+export function forgetStation(token: string): void {
+  try {
+    if (localStorage.getItem(LAST_KEY) === token) localStorage.removeItem(LAST_KEY);
+  } catch {
+    // storage unavailable: nothing was remembered either
+  }
+}
+
 /** Shown only where installing is possible and has not happened; renders nothing in the installed app. */
 export function InstallBar() {
   const [, rerender] = useState(0);
