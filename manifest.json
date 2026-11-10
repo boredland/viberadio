@@ -9,7 +9,7 @@
     "slash_commands": [
       {
         "command": "/viberadio",
-        "url": "https://venture-receiver-asbestos-commercial.trycloudflare.com/slack/commands",
+        "url": "https://slackdj.jonas-strassel.de/slack/commands",
         "description": "Get this channel's radio tune-in link",
         "should_escape": false
       }
@@ -20,7 +20,7 @@
   },
   "settings": {
     "event_subscriptions": {
-      "request_url": "https://venture-receiver-asbestos-commercial.trycloudflare.com/slack/events",
+      "request_url": "https://slackdj.jonas-strassel.de/slack/events",
       "bot_events": ["message.channels", "member_joined_channel"]
     },
     "org_deploy_enabled": false,
