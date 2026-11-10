@@ -19,6 +19,8 @@ type StationState = {
   backfill: { cursor: string | null; done: boolean; error: string | null };
   /** One-off pass that fills in posters on rows indexed before attribution existed; absent when not running. */
   refill?: { cursor: string | null };
+  /** Set once the pass has finished (or was never owed: the station was created after attribution existed). */
+  attributionDone?: boolean;
   /** Ring buffer, cap SEEN_CAP. */
   seenEventIds: string[];
 };
@@ -77,21 +79,25 @@ export class Station extends DurableObject<Env> {
       CREATE INDEX IF NOT EXISTS library_order ON library(first_ts, seq);
     `);
     // Attribution columns arrived after the table did, so existing stations need them added. SQLite has no
-    // ADD COLUMN IF NOT EXISTS, hence the pragma check. A station that already finished indexing re-reads the channel
-    // once to learn who posted each link; `refill` tracks that pass separately from `backfill`, because `backfill.done`
-    // gates history rotation and a complete station must keep playing while it runs.
+    // ADD COLUMN IF NOT EXISTS, hence the pragma check.
     const cols = ctx.storage.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('library')").toArray();
-    const addedAttribution = !cols.some((c) => c.name === "added_by_id");
-    if (addedAttribution) {
+    if (!cols.some((c) => c.name === "added_by_id")) {
       ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN added_by_id TEXT");
       ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN added_by TEXT");
     }
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get<StationState>("state")) ?? null;
       const s = this.state;
-      if (addedAttribution && s?.backfill.done && !s.backfill.error) {
+      // A station that already finished indexing re-reads the channel once to learn who posted each link. `refill` is
+      // separate from `backfill` because `backfill.done` gates history rotation, and a complete station must keep playing
+      // while it runs. The trigger is the persisted `attributionDone` flag, not the ALTER above: if the process died
+      // between the ALTER and this write, the column would already exist on the next start and the pass would be lost.
+      if (s && s.backfill.done && !s.backfill.error && !s.attributionDone && !s.refill) {
         s.refill = { cursor: null };
         await ctx.storage.put("state", s);
+        await ctx.storage.setAlarm(Date.now());
+      } else if (s?.refill) {
+        // An unfinished pass whose alarm was lost (e.g. a throw before the retry logic existed) is resumed.
         await ctx.storage.setAlarm(Date.now());
       }
     });
@@ -152,12 +158,17 @@ export class Station extends DurableObject<Env> {
         source: "queue",
         addedBy: adder.name,
       });
-      // Keeps the original first_ts; re-posting a link revives a dead row and credits the person who brought it back.
+      // Keeps the original first_ts. Credit rule, the same as the backfill's: whoever first posted a link added it, so a
+      // re-post of a live video leaves the poster alone (otherwise the credit would depend on whether the backfill had
+      // already reached the original post). Reviving a removed video is the exception: that person brought it back.
       this.ctx.storage.sql.exec(
         `INSERT INTO library(video_id, first_ts, seq, title, author, thumbnail_url, dead, added_by_id, added_by) VALUES (?,?,?,?,?,?,0,?,?)
-         ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, author=excluded.author, thumbnail_url=excluded.thumbnail_url, dead=0,
-           added_by_id=COALESCE(excluded.added_by_id, library.added_by_id),
-           added_by=CASE WHEN excluded.added_by_id IS NOT NULL THEN excluded.added_by ELSE library.added_by END`,
+         ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, author=excluded.author, thumbnail_url=excluded.thumbnail_url,
+           added_by_id=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by_id
+                            WHEN library.added_by_id IS NULL THEN excluded.added_by_id ELSE library.added_by_id END,
+           added_by=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by
+                         WHEN library.added_by_id IS NULL THEN excluded.added_by ELSE library.added_by END,
+           dead=0`,
         it.videoId,
         messageTs,
         it.seq,
@@ -473,25 +484,35 @@ export class Station extends DurableObject<Env> {
     if (s.refill) return this.runRefill(s);
   }
 
-  /** One conversations.history page. Returns null after scheduling a retry (429), so callers just stop. */
+  /**
+   * One conversations.history page. Returns null when nothing should be processed now: a 429, or a network/parse failure.
+   * Either way a retry alarm is already set, so callers just stop. Letting a throw escape alarm() would leave the pass
+   * without an alarm if the runtime does not retry it, and nothing would ever resume it.
+   */
   private async readHistoryPage(s: StationState, cursor: string | null) {
-    const res = await slackApi("conversations.history", this.env.SLACK_BOT_TOKEN, {
-      channel: s.channelId,
-      limit: "200",
-      ...(cursor ? { cursor } : {}),
-    });
-    if (res.status === 429) {
-      const wait = Number(res.headers.get("Retry-After")) || BACKFILL_DEFAULT_RETRY_S;
-      await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
+    try {
+      const res = await slackApi("conversations.history", this.env.SLACK_BOT_TOKEN, {
+        channel: s.channelId,
+        limit: "200",
+        ...(cursor ? { cursor } : {}),
+      });
+      if (res.status === 429) {
+        const wait = Number(res.headers.get("Retry-After")) || BACKFILL_DEFAULT_RETRY_S;
+        await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
+        return null;
+      }
+      return (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        messages?: SlackMessage[];
+        has_more?: boolean;
+        response_metadata?: { next_cursor?: string };
+      };
+    } catch (err) {
+      console.error("conversations.history threw:", err);
+      await this.ctx.storage.setAlarm(Date.now() + BACKFILL_DEFAULT_RETRY_S * 1000);
       return null;
     }
-    return (await res.json()) as {
-      ok: boolean;
-      error?: string;
-      messages?: SlackMessage[];
-      has_more?: boolean;
-      response_metadata?: { next_cursor?: string };
-    };
   }
 
   private async runBackfill(s: StationState): Promise<void> {
@@ -523,7 +544,9 @@ export class Station extends DurableObject<Env> {
         s.backfill.cursor = next;
         await this.ctx.storage.setAlarm(Date.now() + BACKFILL_PAGE_DELAY_MS);
       } else {
+        // A backfill that finishes here records every poster itself, so no separate attribution pass is owed.
         s.backfill = { cursor: null, done: true, error: null };
+        s.attributionDone = true;
       }
     }
     await this.persist();
@@ -542,6 +565,7 @@ export class Station extends DurableObject<Env> {
     if (!body.ok) {
       console.error("refill: conversations.history failed:", body.error);
       delete s.refill;
+      s.attributionDone = true;
     } else {
       for (const m of body.messages ?? []) {
         if (!isUserMessage(m) || !m.ts || !m.user) continue;
@@ -561,6 +585,7 @@ export class Station extends DurableObject<Env> {
         await this.ctx.storage.setAlarm(Date.now() + BACKFILL_PAGE_DELAY_MS);
       } else {
         delete s.refill;
+        s.attributionDone = true;
       }
     }
     await this.persist();
