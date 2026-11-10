@@ -127,6 +127,8 @@ async function slackCommands(request: Request, env: Env): Promise<Response> {
 
 /** Cap per request: each link costs an oEmbed subrequest, and the Workers Free plan allows 50 per invocation. */
 const MAX_WEB_ADD = 10;
+/** Largest accepted body in bytes; a 10k-char text is well under this even with JSON escaping. */
+const MAX_WEB_BODY = 40_000;
 
 /**
  * Adds links from the web app (the PWA share target). The station token is the capability, as for Next, so no other
@@ -135,6 +137,9 @@ const MAX_WEB_ADD = 10;
  */
 async function addFromWeb(request: Request, env: Env, token: string): Promise<Response> {
   if (!(request.headers.get("Content-Type") ?? "").includes("application/json")) return json({ error: "bad_content_type" }, 415);
+  // Refused before the body is read: the length check below only runs once the whole body is already in memory.
+  const declared = Number(request.headers.get("Content-Length"));
+  if (!Number.isFinite(declared) || declared > MAX_WEB_BODY) return json({ error: "too_large" }, 413);
   const info = await registry(env).lookupToken(token);
   if (!info) return json({ error: "unknown_station" }, 404);
   const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
@@ -152,13 +157,21 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
     else unavailable.push(videoId);
   });
 
-  if (items.length > 0) {
-    // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.
-    const now = Date.now();
-    const ts = `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, "0")}000`;
-    await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, `web-${crypto.randomUUID()}`, ts, items);
-  }
-  return json({ added: items.map((i) => ({ videoId: i.videoId, title: i.title })), unavailable });
+  if (items.length === 0) return json({ error: "none_playable", unavailable }, 422);
+
+  // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.
+  const now = Date.now();
+  const ts = `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, "0")}000`;
+  // Same links within the same 30 s window share an event id, so enqueue's dedupe absorbs a double tap or a retry.
+  // Without it each request would mint a fresh id and queue the same video twice.
+  const window30 = Math.floor(now / 30_000);
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${window30}:${items.map((i) => i.videoId).join(",")}`),
+  );
+  const eventId = `web-${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+  const { accepted } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items);
+  return json({ added: items.map((i) => ({ videoId: i.videoId, title: i.title })), unavailable, duplicate: !accepted });
 }
 
 export default {

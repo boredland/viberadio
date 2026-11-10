@@ -1,21 +1,30 @@
 let apiPromise: Promise<void> | null = null;
 
+/** A request that neither completes nor errors (captive portal, stalled connection) must not pin the cached promise. */
+const API_LOAD_TIMEOUT_MS = 15_000;
+
 /**
  * Loads the IFrame API script once. Safe to call early to preload.
- * A failed load (offline start) is not cached: the next call dials again, so the page can recover when the network
+ * A failed or stalled load is not cached: the next call dials again, so the page can recover when the network
  * returns without a manual reload.
  */
 export function loadYouTubeApi(): Promise<void> {
   if (window.YT?.Player) return Promise.resolve();
   if (apiPromise) return apiPromise;
   const attempt = new Promise<void>((resolve, reject) => {
-    window.onYouTubeIframeAPIReady = () => resolve();
     const s = document.createElement("script");
-    s.src = "https://www.youtube.com/iframe_api";
-    s.onerror = () => {
+    const timer = setTimeout(() => fail(new Error("YouTube iframe API timed out")), API_LOAD_TIMEOUT_MS);
+    const fail = (err: Error) => {
+      clearTimeout(timer);
       s.remove();
-      reject(new Error("YouTube iframe API failed to load"));
+      reject(err);
     };
+    window.onYouTubeIframeAPIReady = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    s.onerror = () => fail(new Error("YouTube iframe API failed to load"));
+    s.src = "https://www.youtube.com/iframe_api";
     document.head.appendChild(s);
   });
   apiPromise = attempt;

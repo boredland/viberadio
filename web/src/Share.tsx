@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { extractVideoIds } from "../../shared/video";
 import { forgetStation, lastStation } from "./pwa";
 import { Win } from "./ui";
@@ -20,9 +20,12 @@ export function Share() {
   }, []);
   const [token] = useState(() => lastStation());
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  // State updates after the next render, so a fast second tap would still see "idle"; a ref blocks it synchronously.
+  const inFlight = useRef(false);
 
   const add = async () => {
-    if (!token) return;
+    if (!token || inFlight.current) return;
+    inFlight.current = true;
     setPhase({ kind: "sending" });
     try {
       const text = ids.map((id) => `https://youtu.be/${id}`).join(" ");
@@ -35,11 +38,22 @@ export function Share() {
         forgetStation(token);
         return setPhase({ kind: "error", message: "That station no longer exists. Open a station link first." });
       }
-      if (res.status === 422) return setPhase({ kind: "error", message: "No YouTube video in what you shared." });
+      if (res.status === 422) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        return setPhase({
+          kind: "error",
+          message:
+            body.error === "none_playable"
+              ? "That video is unavailable or can't be embedded, so it can't be played here."
+              : "No YouTube video in what you shared.",
+        });
+      }
       if (!res.ok) return setPhase({ kind: "error", message: `Couldn't add it (${res.status}). Try again.` });
       setPhase({ kind: "done", result: (await res.json()) as Result });
     } catch {
       setPhase({ kind: "error", message: "No connection. Try again when you're back online." });
+    } finally {
+      inFlight.current = false;
     }
   };
 
