@@ -167,6 +167,8 @@ export function Station({ token }: { token: string }) {
     setNowPlaying(snap?.now ?? null);
   }, [tuned, snap?.now?.id]);
 
+  useEffect(() => () => setNowPlaying(null), []);
+
   useEffect(() => {
     if (!tuned) return;
     const offNext = bindMediaKeys(() => connRef.current?.send({ type: "next" }));

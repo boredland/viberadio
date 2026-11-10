@@ -64,6 +64,7 @@ export function connect(
     const sock = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(token)}`);
     ws = sock;
     sock.onopen = () => {
+      if (ws !== sock) return;
       backoff = BACKOFF_START_MS;
       lastRxAt = Date.now();
       onStatus(true);
@@ -71,6 +72,8 @@ export function connect(
       pingTimer = setInterval(ping, PING_INTERVAL_MS);
     };
     sock.onmessage = (ev) => {
+      // A replaced socket can still deliver while closing; its traffic must not count as liveness for the new one.
+      if (ws !== sock) return;
       lastRxAt = Date.now();
       if (typeof ev.data !== "string") return;
       const msg = JSON.parse(ev.data) as ServerMessage;
@@ -112,7 +115,8 @@ export function connect(
   const probe = () => {
     if (closed) return;
     const s = ws?.readyState;
-    if (s === undefined || s === WebSocket.CLOSING || s === WebSocket.CLOSED) reconnectNow();
+    // CONNECTING counts too: a dial started before sleep may never complete, and nothing else times it out.
+    if (s === undefined || s === WebSocket.CONNECTING || s === WebSocket.CLOSING || s === WebSocket.CLOSED) reconnectNow();
     else if (s === WebSocket.OPEN) ping();
   };
   const onVisible = () => document.visibilityState === "visible" && probe();
