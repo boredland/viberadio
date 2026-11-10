@@ -222,7 +222,9 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   const pl = playlistItems(reads, new Set(ids), ids.length);
 
   if (items.length === 0 && pl.items.length === 0) {
-    return json({ error: "none_playable", unavailable, playlistsFailed: pl.failed }, 422);
+    // A playlist that read fine but contributed nothing (every video was named in the message already) is not a failed read.
+    const error = pl.summaries.length > 0 ? "nothing_new" : "none_playable";
+    return json({ error, unavailable, playlistsFailed: pl.failed }, 422);
   }
 
   // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.

@@ -53,7 +53,9 @@ export function Share() {
           message:
             body.error === "none_playable"
               ? "Nothing there can be played here: the video is unavailable or can't be embedded, or the playlist is private or an album."
-              : "No YouTube video in what you shared.",
+              : body.error === "nothing_new"
+                ? "The playlist was read, but its videos are the ones already in what you shared."
+                : "No YouTube video in what you shared.",
         });
       }
       if (!res.ok) return setPhase({ kind: "error", message: `Couldn't add it (${res.status}). Try again.` });
