@@ -45,9 +45,12 @@ const BACKFILL_PAGE_DELAY_MS = 1500;
 const BACKFILL_DEFAULT_RETRY_S = 60;
 const FATAL_PLAYER_ERRORS = new Set([100, 101, 150]);
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+const TITLE_MISS_TTL_MS = 10 * 60_000;
 
 export class Station extends DurableObject<Env> {
   private state: StationState | null = null;
+  /** video id -> epoch ms until which a failed title lookup is not retried; in memory, so a restart simply retries. */
+  private titleMisses = new Map<string, number>();
   private advanceLock: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -281,7 +284,8 @@ export class Station extends DurableObject<Env> {
    * One page of the rotation, newest post first (a mistake is usually recent). Backfilled rows have no title until
    * they are first played, so missing ones are resolved here, a page at a time: each costs one oEmbed subrequest and the
    * page size keeps that well under the 50-per-invocation limit. A failed lookup leaves the row untitled rather than
-   * marking it dead: listing must not have side effects a flaky network could trigger.
+   * marking it dead: listing must not have side effects a flaky network could trigger. It is remembered for a while,
+   * though, so reopening the list does not re-fetch the same unavailable videos on every request.
    */
   async library(offset: number, limit: number): Promise<LibraryPage> {
     const sql = this.ctx.storage.sql;
@@ -289,14 +293,19 @@ export class Station extends DurableObject<Env> {
     const page = sql
       .exec<LibraryRow>("SELECT * FROM library WHERE dead=0 ORDER BY first_ts DESC, seq DESC LIMIT ? OFFSET ?", limit, offset)
       .toArray();
-    const missing = page.filter((r) => r.title === null);
+    const now = Date.now();
+    const missing = page.filter((r) => r.title === null && (this.titleMisses.get(r.video_id) ?? 0) < now);
     const metas = await Promise.all(missing.map((r) => fetchVideoMeta(r.video_id)));
     missing.forEach((r, i) => {
       const m = metas[i];
-      if (!m) return;
+      if (!m) {
+        this.titleMisses.set(r.video_id, now + TITLE_MISS_TTL_MS);
+        return;
+      }
       r.title = m.title;
       r.author = m.author;
-      sql.exec("UPDATE library SET title=?, author=?, thumbnail_url=? WHERE video_id=?", m.title, m.author, m.thumbnailUrl, r.video_id);
+      // `dead=0` guard: a removal during the lookups above must not be touched by a late title write.
+      sql.exec("UPDATE library SET title=?, author=?, thumbnail_url=? WHERE video_id=? AND dead=0", m.title, m.author, m.thumbnailUrl, r.video_id);
     });
     return { total, offset, rows: page.map((r) => ({ videoId: r.video_id, title: r.title, author: r.author })) };
   }
@@ -364,6 +373,11 @@ export class Station extends DurableObject<Env> {
           thumbnailUrl,
           row.video_id,
         );
+        // The await above let other events run: a removal during the lookup marked the row dead, and returning it now
+        // would play a video someone just removed (current is null while an advance is in flight, so removeVideo had
+        // nothing else to stop).
+        const stillAlive = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE video_id=? AND dead=0", row.video_id).one().n;
+        if (stillAlive === 0) continue;
       }
       s.rotationCursor = cursor;
       return {

@@ -3,6 +3,8 @@ import type { LibraryPage, LibraryRow } from "../../shared/protocol";
 import { Win } from "./ui";
 
 const CONFIRM_MS = 4000;
+/** Must match the server's page size (LIBRARY_PAGE): offsets are computed in multiples of it. */
+const PAGE_SIZE = 15;
 
 type Props = {
   token: string;
@@ -26,33 +28,62 @@ export function Rotation({ token, version, connected, onRemove }: Props) {
   const [armed, setArmed] = useState<string | null>(null);
   // A response for an older request (or a closed list) must not overwrite a newer one.
   const seq = useRef(0);
+  const rowsRef = useRef<LibraryRow[]>([]);
+  rowsRef.current = rows;
 
-  const load = useCallback(
-    async (offset: number) => {
+  const fetchPage = useCallback(
+    async (offset: number): Promise<LibraryPage> => {
+      const res = await fetch(`/api/station/${encodeURIComponent(token)}/library?offset=${offset}&limit=${PAGE_SIZE}`);
+      if (!res.ok) throw new Error(String(res.status));
+      return (await res.json()) as LibraryPage;
+    },
+    [token],
+  );
+
+  /** Replaces the list with its first `count` rows, so rows the listener paged in with MORE survive a refresh. */
+  const reload = useCallback(
+    async (count: number) => {
       const mine = ++seq.current;
       setLoading(true);
       setFailed(false);
       try {
-        const res = await fetch(`/api/station/${encodeURIComponent(token)}/library?offset=${offset}`);
-        if (!res.ok) throw new Error(String(res.status));
-        const page = (await res.json()) as LibraryPage;
+        const offsets = Array.from({ length: Math.max(1, Math.ceil(count / PAGE_SIZE)) }, (_, i) => i * PAGE_SIZE);
+        const pages = await Promise.all(offsets.map(fetchPage));
         if (mine !== seq.current) return;
-        setTotal(page.total);
-        setRows((prev) => (offset === 0 ? page.rows : [...prev, ...page.rows.filter((r) => !prev.some((p) => p.videoId === r.videoId))]));
+        const seen = new Set<string>();
+        setRows(pages.flatMap((p) => p.rows).filter((r) => !seen.has(r.videoId) && seen.add(r.videoId)));
+        setTotal(pages[0].total);
       } catch {
         if (mine === seq.current) setFailed(true);
       } finally {
         if (mine === seq.current) setLoading(false);
       }
     },
-    [token],
+    [fetchPage],
   );
 
-  // Reload the first page when opened and whenever the station changes while it is open (a removal by anyone).
+  const more = useCallback(async () => {
+    const mine = ++seq.current;
+    setLoading(true);
+    setFailed(false);
+    try {
+      const page = await fetchPage(rowsRef.current.length);
+      if (mine !== seq.current) return;
+      setTotal(page.total);
+      setRows((prev) => [...prev, ...page.rows.filter((r) => !prev.some((p) => p.videoId === r.videoId))]);
+    } catch {
+      if (mine === seq.current) setFailed(true);
+    } finally {
+      if (mine === seq.current) setLoading(false);
+    }
+  }, [fetchPage]);
+
+  // Reload when opened and whenever the station changes while it is open (a removal by anyone), keeping as many rows as
+  // are already shown.
   useEffect(() => {
-    if (open) void load(0);
+    if (open) void reload(Math.max(PAGE_SIZE, rowsRef.current.length));
     else seq.current++;
-  }, [open, version, load]);
+  }, [open, version, reload]);
 
   useEffect(() => {
     if (!armed) return;
@@ -101,7 +132,7 @@ export function Rotation({ token, version, connected, onRemove }: Props) {
           {!loading && !failed && rows.length === 0 && <p className="dim">The rotation is empty.</p>}
           {loading && <p className="dim">Loading…</p>}
           {!loading && rows.length < total && (
-            <button className="btn" onClick={() => void load(rows.length)}>
+            <button className="btn" onClick={() => void more()}>
               MORE ({total - rows.length})
             </button>
           )}
