@@ -5,7 +5,8 @@
   --panel-lo: #07090b;
   --lcd: #000a04;
   --green: #00ff66;
-  --green-dim: #0a8f3c;
+  /* Small text on --panel and on the highlighted playlist row: #19b855 is >= 4.9:1 on both (the old #0a8f3c was 4.25 and 3.06). */
+  --green-dim: #19b855;
   --amber: #ff9f1c;
   --red: #ff4d4d;
   --text: #b8f5cc;
