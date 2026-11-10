@@ -60,7 +60,12 @@ export function Station({ token }: { token: string }) {
 
   useEffect(() => {
     if (!tuned) return;
-    const check = () => syncRef.current?.checkDrift();
+    const check = () => {
+      const sync = syncRef.current;
+      sync?.checkDrift();
+      const overdue = sync?.pendingEndId();
+      if (overdue) connRef.current?.send({ type: "ended", id: overdue });
+    };
     const onVisible = () => document.visibilityState === "visible" && check();
     const drift = setInterval(check, DRIFT_TICK_MS);
     const ui = setInterval(() => setTick((t) => t + 1), UI_TICK_MS);
@@ -85,8 +90,8 @@ export function Station({ token }: { token: string }) {
         setSnap(s);
         const sync = syncRef.current;
         sync?.apply(s);
-        const lostEnd = sync?.unreportedEndId();
-        if (lostEnd && lostEnd === s.now?.id) conn.send({ type: "ended", id: lostEnd });
+        const overdue = sync?.pendingEndId();
+        if (overdue) conn.send({ type: "ended", id: overdue });
       },
       setConnected,
     );

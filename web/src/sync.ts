@@ -6,6 +6,8 @@ const BACKOFF_MAX_MS = 30_000;
 const DRIFT_THRESHOLD_MS = 1000;
 /** After a seek or track load, buffering distorts getCurrentTime; checking sooner causes seek loops. */
 const DRIFT_COOLDOWN_MS = 5000;
+/** Slack for clock-offset error and buffering before a track counts as overrun. */
+const OVERRUN_GRACE_MS = 1500;
 
 export type Connection = {
   send(msg: ClientMessage): void;
@@ -120,13 +122,19 @@ export class PlayerSync {
   }
 
   /**
-   * Id of a track whose ENDED was lost (socket closed when it fired), else null.
-   * Reconnecting re-sends the same track id with a frozen clock, so without this a lone listener sits at the end until Next.
-   * The server ignores ids that are no longer current, so re-sending is idempotent.
+   * Id of the current track when it is over but nobody reported it, else null.
+   * Covers an ENDED lost while the socket was down, and a track the station clock has run past its end (unfreeze after a
+   * lost ENDED, or a late joiner): YouTube then flickers at the clamped end and never emits ENDED. The server only
+   * advances on the current id, so re-sending is idempotent.
    */
-  unreportedEndId(): string | null {
-    if (this.player.getPlayerState() !== window.YT!.PlayerState.ENDED) return null;
-    return this.endedId();
+  pendingEndId(): string | null {
+    const now = this.latest?.now;
+    const id = this.endedId();
+    if (!now || !id) return null;
+    if (this.player.getPlayerState() === window.YT!.PlayerState.ENDED) return id;
+    const durationMs = this.player.getDuration() * 1000;
+    if (Date.now() < this.quietUntil || durationMs <= 0) return null;
+    return this.targetMs(now.startedAtMs) > durationMs + OVERRUN_GRACE_MS ? id : null;
   }
 
   checkDrift(): void {
