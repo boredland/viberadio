@@ -2,15 +2,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { StateMessage } from "../../shared/protocol";
 import { createPlayer, loadYouTubeApi, youTubeApiReady } from "./player";
 import { connect, PlayerSync, type Connection } from "./sync";
+import { Marquee, Visualizer, Win } from "./ui";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
 /** Page misconfiguration (missing Referer / client identity), not a bad video: must never skip tracks for everyone. */
 const ERR_CONFIG = 153;
 
-function fmt(ms: number): string {
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const pad3 = (n: number) => String(n).padStart(3, "0");
+
+/** mm:ss, or h:mm:ss past an hour, for the LCD readout. */
+function fmtLcd(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}:${pad2(m)}:${pad2(s % 60)}` : `${pad2(m)}:${pad2(s % 60)}`;
 }
 
 export function Station({ token }: { token: string }) {
@@ -137,82 +144,133 @@ export function Station({ token }: { token: string }) {
     setUnmuteChip(false);
   };
 
-  if (valid === null) return <main className="card">Loading…</main>;
-  if (valid === false) return <main className="card">This station link isn't valid.</main>;
+  if (valid === null)
+    return (
+      <main className="stack">
+        <Win title="VIBERADIO">
+          <p className="lcd-text">LOADING<span className="blink">_</span></p>
+        </Win>
+      </main>
+    );
+  if (valid === false)
+    return (
+      <main className="stack">
+        <Win title="VIBERADIO">
+          <p className="lcd-text err">ERR: UNKNOWN STATION</p>
+          <p className="dim">This station link isn't valid.</p>
+        </Win>
+      </main>
+    );
 
   const now = snap?.now ?? null;
   const duration = (tuned && syncRef.current ? playerRef.current?.getDuration() : 0) ?? 0;
   const elapsed = syncRef.current?.elapsedMs() ?? 0;
+  const pct = duration > 0 ? Math.min(100, (elapsed / (duration * 1000)) * 100) : 0;
+  const emptyMsg = !snap
+    ? ""
+    : snap.indexing
+      ? "Indexing channel history…"
+      : snap.librarySize === 0
+        ? "Nothing in rotation yet — post a YouTube link in the channel."
+        : "Nothing playable right now — post a YouTube link in the channel.";
+  const ticker = now ? `${now.title} — ${now.author}` : tuned ? emptyMsg : "PRESS TUNE IN TO START";
 
   return (
-    <main className="card">
-      <header>
-        <h1>viberadio</h1>
-        <p>
-          🎧 {snap?.listeners ?? 0} listening · {snap?.librarySize ?? 0} tracks in rotation
-        </p>
-      </header>
-
-      {tuned && !connected && <p className="banner">Reconnecting…</p>}
-      {configError && <p className="banner">Player configuration error (153)</p>}
-
-      {!tuned && (
-        <button className="primary" disabled={!apiReady} onClick={tuneIn}>
-          ▶ Tune in
-        </button>
-      )}
-      <div className="player" ref={hostRef} hidden={!tuned} />
-
-      {tuned && now && (
-        <section>
-          <h2>{now.title}</h2>
-          <p>{now.author}</p>
-          {now.source === "history" && <span className="badge">↩ from channel history</span>}
-          {duration > 0 ? <progress value={Math.min(elapsed, duration * 1000)} max={duration * 1000} /> : <progress />}
-          <p className="time">
-            {fmt(elapsed)}
-            {duration > 0 ? ` / ${fmt(duration * 1000)}` : ""}
-          </p>
-        </section>
-      )}
-
-      {tuned && !now && snap && (
-        <p>
-          {snap.indexing
-            ? "Indexing channel history…"
-            : snap.librarySize === 0
-              ? "Nothing in rotation yet — post a YouTube link in the channel."
-              : "Nothing playable right now — post a YouTube link in the channel."}
-        </p>
-      )}
-
-      {tuned && (
-        <div className="controls">
-          <button disabled={now === null} onClick={() => connRef.current?.send({ type: "next" })}>
-            Next ⏭
-          </button>
-          <button onClick={toggleMute}>{muted ? "🔇" : "🔊"}</button>
-          <input type="range" min={0} max={100} value={volume} onChange={(e) => setVol(Number(e.target.value))} />
-          {unmuteChip && (
-            <button className="chip" onClick={toggleMute}>
-              Tap to unmute
-            </button>
-          )}
+    <main className="stack">
+      <Win title="VIBERADIO">
+        <div className="lcd">
+          <div className="lcd-top">
+            <div className="clock" aria-label="elapsed time">
+              {tuned && now ? fmtLcd(elapsed) : "--:--"}
+            </div>
+            <Visualizer active={tuned && now !== null && connected} />
+          </div>
+          <Marquee text={ticker} />
+          <div className="lcd-info">
+            <span className={now?.source === "history" ? "tag amber" : "tag"}>
+              {now ? (now.source === "history" ? "↩ HISTORY" : "★ QUEUE") : "IDLE"}
+            </span>
+            <span>🎧 {pad3(snap?.listeners ?? 0)} LSN</span>
+            <span>{pad3(snap?.librarySize ?? 0)} TRK</span>
+            <span>{duration > 0 ? fmtLcd(duration * 1000) : "--:--"} LEN</span>
+          </div>
         </div>
-      )}
 
-      {snap && snap.queue.length > 0 && (
-        <section>
-          <h3>Up next</h3>
-          <ol>
-            {snap.queue.map((t) => (
+        <div
+          className={duration > 0 ? "seek" : "seek indeterminate"}
+          role="progressbar"
+          aria-label="track position"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(pct)}
+        >
+          <div className="seek-fill" style={{ width: `${pct}%` }} />
+        </div>
+
+        {tuned && !connected && <p className="banner">RECONNECTING…</p>}
+        {configError && <p className="banner">PLAYER CONFIGURATION ERROR (153)</p>}
+
+        {!tuned ? (
+          <button className="btn tune" disabled={!apiReady} onClick={tuneIn}>
+            ▶ TUNE IN
+          </button>
+        ) : (
+          <div className="controls">
+            <button className="btn" disabled={now === null} onClick={() => connRef.current?.send({ type: "next" })}>
+              NEXT ⏭
+            </button>
+            <button className="btn" onClick={toggleMute} aria-pressed={muted}>
+              {muted ? "MUTED" : "MUTE"}
+            </button>
+            <label className="vol">
+              <span>VOL</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={volume}
+                onChange={(e) => setVol(Number(e.target.value))}
+                style={{ ["--fill" as string]: `${volume}%` }}
+              />
+            </label>
+            {unmuteChip && (
+              <button className="btn amber" onClick={toggleMute}>
+                TAP TO UNMUTE
+              </button>
+            )}
+          </div>
+        )}
+      </Win>
+
+      <Win title="VIDEO" className={tuned ? "" : "collapsed"}>
+        <div className="player" ref={hostRef} />
+      </Win>
+
+      <Win title="PLAYLIST">
+        {now || (snap?.queue.length ?? 0) > 0 ? (
+          <ol className="playlist">
+            {now && (
+              <li className="current">
+                <span className="n">01.</span>
+                <span className="t">
+                  {now.title} <small>— {now.author}</small>
+                </span>
+                <span className="d">{duration > 0 ? fmtLcd(duration * 1000) : ""}</span>
+              </li>
+            )}
+            {snap?.queue.map((t, i) => (
               <li key={t.id}>
-                {t.title} <small>— {t.author}</small>
+                <span className="n">{pad2(i + 2)}.</span>
+                <span className="t">
+                  {t.title} <small>— {t.author}</small>
+                </span>
               </li>
             ))}
           </ol>
-        </section>
-      )}
+        ) : (
+          <p className="dim">{emptyMsg || "Queue empty."}</p>
+        )}
+      </Win>
     </main>
   );
 }
