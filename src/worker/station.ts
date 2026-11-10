@@ -383,7 +383,15 @@ export class Station extends DurableObject<Env> {
     if (name || !id) return name;
     if (id === "web") return WEB_ADDER;
     const resolved = await resolveSlackName(this.env, id);
-    if (resolved) this.ctx.storage.sql.exec("UPDATE library SET added_by=? WHERE video_id=? AND added_by IS NULL", resolved, videoId);
+    // Same binding as fillNames: only write the name if the row still belongs to the poster it was resolved for.
+    if (resolved) {
+      this.ctx.storage.sql.exec(
+        "UPDATE library SET added_by=? WHERE video_id=? AND added_by IS NULL AND added_by_id=?",
+        resolved,
+        videoId,
+        id,
+      );
+    }
     return resolved;
   }
 
@@ -397,7 +405,14 @@ export class Station extends DurableObject<Env> {
       const n = r.added_by_id === "web" ? WEB_ADDER : (byId.get(r.added_by_id) ?? null);
       if (!n) continue;
       r.added_by = n;
-      this.ctx.storage.sql.exec("UPDATE library SET added_by=? WHERE video_id=? AND added_by IS NULL", n, r.video_id);
+      // Bound to the id the name was resolved for: the lookup above awaited Slack, and a backfill page arriving meanwhile can
+      // reassign this row to an earlier poster, whose name this write would otherwise overwrite wrongly.
+      this.ctx.storage.sql.exec(
+        "UPDATE library SET added_by=? WHERE video_id=? AND added_by IS NULL AND added_by_id=?",
+        n,
+        r.video_id,
+        r.added_by_id,
+      );
     }
   }
 
