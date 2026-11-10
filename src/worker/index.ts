@@ -138,8 +138,11 @@ const MAX_WEB_BODY = 40_000;
 async function addFromWeb(request: Request, env: Env, token: string): Promise<Response> {
   if (!(request.headers.get("Content-Type") ?? "").includes("application/json")) return json({ error: "bad_content_type" }, 415);
   // Refused before the body is read: the length check below only runs once the whole body is already in memory.
-  const declared = Number(request.headers.get("Content-Length"));
-  if (!Number.isFinite(declared) || declared > MAX_WEB_BODY) return json({ error: "too_large" }, 413);
+  // A missing header (chunked upload) is refused too: Number(null) is 0 and would sail past the cap. Browsers always
+  // send Content-Length for a fetch() with a string body.
+  const declared = request.headers.get("Content-Length");
+  if (declared === null || !/^\d+$/.test(declared)) return json({ error: "length_required" }, 411);
+  if (Number(declared) > MAX_WEB_BODY) return json({ error: "too_large" }, 413);
   const info = await registry(env).lookupToken(token);
   if (!info) return json({ error: "unknown_station" }, 404);
   const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
