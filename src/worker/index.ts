@@ -129,6 +129,8 @@ async function slackCommands(request: Request, env: Env): Promise<Response> {
 const MAX_WEB_ADD = 10;
 /** Largest accepted body in bytes; a 10k-char text is well under this even with JSON escaping. */
 const MAX_WEB_BODY = 40_000;
+/** Rotation rows per page; each untitled one costs an oEmbed fetch, so this also caps subrequests per request. */
+const LIBRARY_PAGE = 15;
 
 /**
  * Adds links from the web app (the PWA share target). The station token is the capability, as for Next, so no other
@@ -187,6 +189,19 @@ export default {
 
     const add = pathname.match(/^\/api\/station\/([^/]+)\/add$/);
     if (request.method === "POST" && add) return addFromWeb(request, env, add[1]);
+
+    const lib = pathname.match(/^\/api\/station\/([^/]+)\/library$/);
+    if (request.method === "GET" && lib) {
+      const info = await registry(env).lookupToken(lib[1]);
+      if (!info) return json({ error: "unknown_station" }, 404);
+      // Clamped, not rejected: the page size bounds the oEmbed subrequests a listing can trigger.
+      const offset = Math.max(0, Math.min(100_000, Math.floor(Number(url.searchParams.get("offset"))) || 0));
+      const limit = Math.max(1, Math.min(LIBRARY_PAGE, Math.floor(Number(url.searchParams.get("limit"))) || LIBRARY_PAGE));
+      const station = env.STATION.getByName(lib[1]);
+      await station.init(info.teamId, info.channelId);
+      return json(await station.library(offset, limit));
+    }
+
     if (request.method === "GET" && pathname.startsWith("/api/station/")) {
       const token = pathname.slice("/api/station/".length);
       const info = await registry(env).lookupToken(token);

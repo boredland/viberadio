@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { ClientMessage, CurrentTrack, ServerMessage, StateMessage, Track } from "../../shared/protocol";
+import type { ClientMessage, CurrentTrack, LibraryPage, ServerMessage, StateMessage, Track } from "../../shared/protocol";
 import type { Env } from "./index";
 import { extractVideoIds } from "../../shared/video";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
@@ -44,6 +44,7 @@ const MAX_ROWS_EXAMINED = 20;
 const BACKFILL_PAGE_DELAY_MS = 1500;
 const BACKFILL_DEFAULT_RETRY_S = 60;
 const FATAL_PLAYER_ERRORS = new Set([100, 101, 150]);
+const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
 export class Station extends DurableObject<Env> {
   private state: StationState | null = null;
@@ -192,6 +193,9 @@ export class Station extends DurableObject<Env> {
       case "remove":
         if (typeof msg.id === "string") await this.remove(msg.id);
         return;
+      case "removeVideo":
+        if (typeof msg.videoId === "string" && VIDEO_ID.test(msg.videoId)) await this.removeVideo(msg.videoId);
+        return;
     }
   }
 
@@ -254,14 +258,47 @@ export class Station extends DurableObject<Env> {
   private async remove(id: string): Promise<void> {
     const s = this.st();
     const target = s.current?.id === id ? s.current : s.queue.find((t) => t.id === id);
-    if (!target) return;
-    this.ctx.storage.sql.exec("UPDATE library SET dead=1 WHERE video_id=?", target.videoId);
-    s.queue = s.queue.filter((t) => t.videoId !== target.videoId);
+    if (target) await this.removeVideo(target.videoId);
+  }
+
+  /** Entry point for a video that may exist only in the rotation (already played, not queued, not current). */
+  private async removeVideo(videoId: string): Promise<void> {
+    const s = this.st();
+    const inLibrary =
+      this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE video_id=? AND dead=0", videoId).one().n > 0;
+    const queued = s.queue.some((t) => t.videoId === videoId);
+    if (!inLibrary && !queued && s.current?.videoId !== videoId) return;
+    this.ctx.storage.sql.exec("UPDATE library SET dead=1 WHERE video_id=?", videoId);
+    s.queue = s.queue.filter((t) => t.videoId !== videoId);
     s.seenEventIds = s.seenEventIds.filter((e) => !e.startsWith("web-"));
     await this.persist();
     // By video, not slot: removing a queued copy of what is playing right now must stop it too.
-    if (s.current?.videoId === target.videoId) await this.advance(s.current.id);
+    if (s.current?.videoId === videoId) await this.advance(s.current.id);
     else this.broadcast();
+  }
+
+  /**
+   * One page of the rotation, newest post first (a mistake is usually recent). Backfilled rows have no title until
+   * they are first played, so missing ones are resolved here, a page at a time: each costs one oEmbed subrequest and the
+   * page size keeps that well under the 50-per-invocation limit. A failed lookup leaves the row untitled rather than
+   * marking it dead: listing must not have side effects a flaky network could trigger.
+   */
+  async library(offset: number, limit: number): Promise<LibraryPage> {
+    const sql = this.ctx.storage.sql;
+    const total = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE dead=0").one().n;
+    const page = sql
+      .exec<LibraryRow>("SELECT * FROM library WHERE dead=0 ORDER BY first_ts DESC, seq DESC LIMIT ? OFFSET ?", limit, offset)
+      .toArray();
+    const missing = page.filter((r) => r.title === null);
+    const metas = await Promise.all(missing.map((r) => fetchVideoMeta(r.video_id)));
+    missing.forEach((r, i) => {
+      const m = metas[i];
+      if (!m) return;
+      r.title = m.title;
+      r.author = m.author;
+      sql.exec("UPDATE library SET title=?, author=?, thumbnail_url=? WHERE video_id=?", m.title, m.author, m.thumbnailUrl, r.video_id);
+    });
+    return { total, offset, rows: page.map((r) => ({ videoId: r.video_id, title: r.title, author: r.author })) };
   }
 
   private async unfreeze(): Promise<void> {

@@ -5,6 +5,7 @@ import { connect, PlayerSync, type Connection } from "./sync";
 import { Marquee, Visualizer, Win } from "./ui";
 import { bindMediaKeys, bindPlay, setNowPlaying } from "./mediaSession";
 import { forgetStation } from "./pwa";
+import { Rotation } from "./Rotation";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -399,6 +400,16 @@ export function Station({ token, online }: { token: string; online: boolean }) {
           <p className="dim">{emptyMsg || "Queue empty."}</p>
         )}
       </Win>
+
+      {tuned && (
+        <Rotation
+          token={token}
+          // Library size plus the playing/queued ids: changes on any add or removal, and on every track change.
+          version={`${snap?.librarySize ?? 0}:${snap?.now?.id ?? ""}:${snap?.queue.length ?? 0}`}
+          connected={connected}
+          onRemove={(videoId) => connRef.current?.send({ type: "removeVideo", videoId })}
+        />
+      )}
     </main>
   );
 }

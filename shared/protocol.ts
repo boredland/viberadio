@@ -28,4 +28,10 @@ export type ClientMessage =
   | { type: "ended"; id: string }
   | { type: "error"; id: string; code: number }
   /** Drops a track (by Track.id) from the queue and from history rotation; skips it if it is playing. */
-  | { type: "remove"; id: string };
+  | { type: "remove"; id: string }
+  /** Same, by video id: for entries that exist only in the history rotation and have no queue/current Track id. */
+  | { type: "removeVideo"; videoId: string };
+
+export type LibraryRow = { videoId: string; title: string | null; author: string | null };
+/** GET /api/station/:token/library: one page of the rotation, newest post first. */
+export type LibraryPage = { rows: LibraryRow[]; total: number; offset: number };

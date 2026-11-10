@@ -287,6 +287,8 @@ input[type="range"]::-moz-range-thumb {
 .playlist .x.armed { color: #000; background: var(--amber); border-color: var(--amber); letter-spacing: 0.06em; }
 .playlist .x:disabled { opacity: 0.35; cursor: default; }
 .playlist .x:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.playlist.rotation { max-height: 300px; }
+.playlist.rotation li { color: #5fd68a; }
 
 /* ---- landing ---- */
 .boot { margin: 0; white-space: pre-wrap; color: var(--green); text-shadow: 0 0 6px rgba(0, 255, 102, 0.5); font-size: 12px; }
