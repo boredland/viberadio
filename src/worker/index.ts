@@ -76,22 +76,25 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   const threadTs = event.thread_ts ?? event.ts;
   const metas = await Promise.all(ids.map((id) => fetchVideoMeta(id)));
   const items: EnqueueItem[] = [];
+  const unavailable: string[] = [];
   for (const [seq, videoId] of ids.entries()) {
     const meta = metas[seq];
-    if (!meta) {
-      await slackChatPost(
-        env,
-        channel,
-        `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
-        threadTs,
-      );
-      continue;
-    }
-    items.push({ videoId, seq, ...meta });
+    if (meta) items.push({ videoId, seq, ...meta });
+    else unavailable.push(videoId);
   }
 
+  // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
   const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items);
-  if (accepted && items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
+  if (!accepted) return;
+  if (items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
+  for (const videoId of unavailable) {
+    await slackChatPost(
+      env,
+      channel,
+      `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
+      threadTs,
+    );
+  }
 }
 
 async function slackEvents(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
