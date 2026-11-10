@@ -1,5 +1,7 @@
 display_information:
   name: viberadio
+  description: "Turns a channel into a shared radio: every YouTube link posted becomes a track everyone hears in sync."
+  background_color: "#7c3aed"
 features:
   bot_user:
     display_name: viberadio
@@ -16,6 +18,7 @@ oauth_config:
       - channels:read
       - chat:write
       - commands
+      - reactions:write
 settings:
   event_subscriptions:
     request_url: https://slackdj.jonas-strassel.de/slack/events

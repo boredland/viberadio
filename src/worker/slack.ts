@@ -86,3 +86,14 @@ export async function slackChatPost(
     console.error("chat.postMessage threw:", err);
   }
 }
+
+/** `already_reacted` is expected when Slack redelivers an event, so it is not logged. Never retried, like chat posts. */
+export async function slackReact(env: SlackEnv, channel: string, ts: string, name: string): Promise<void> {
+  try {
+    const res = await slackApi("reactions.add", env.SLACK_BOT_TOKEN, { channel, timestamp: ts, name });
+    const body = (await res.json()) as { ok: boolean; error?: string };
+    if (!body.ok && body.error !== "already_reacted") console.error("reactions.add failed:", body.error);
+  } catch (err) {
+    console.error("reactions.add threw:", err);
+  }
+}

@@ -1,7 +1,11 @@
 {
-  "display_information": { "name": "viberadio-dev" },
+  "display_information": {
+    "name": "viberadio",
+    "description": "Turns a channel into a shared radio: every YouTube link posted becomes a track everyone hears in sync.",
+    "background_color": "#7c3aed"
+  },
   "features": {
-    "bot_user": { "display_name": "viberadio-dev", "always_online": true },
+    "bot_user": { "display_name": "viberadio", "always_online": true },
     "slash_commands": [
       {
         "command": "/viberadio",
@@ -12,7 +16,7 @@
     ]
   },
   "oauth_config": {
-    "scopes": { "bot": ["channels:history", "channels:read", "chat:write", "commands"] }
+    "scopes": { "bot": ["channels:history", "channels:read", "chat:write", "commands", "reactions:write"] }
   },
   "settings": {
     "event_subscriptions": {

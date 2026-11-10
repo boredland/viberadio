@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="0.55" stop-color="#db2777"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.38" r="0.6">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <!-- headband -->
+  <path d="M232 580V528C232 355 358 236 512 236S792 355 792 528V580" fill="none" stroke="#fff" stroke-width="56" stroke-linecap="round"/>
+  <!-- ear cups -->
+  <rect x="184" y="548" width="148" height="236" rx="68" fill="#fff"/>
+  <rect x="692" y="548" width="148" height="236" rx="68" fill="#fff"/>
+  <rect x="216" y="592" width="84" height="148" rx="38" fill="#7c3aed" fill-opacity="0.35"/>
+  <rect x="724" y="592" width="84" height="148" rx="38" fill="#7c3aed" fill-opacity="0.35"/>
+  <!-- equaliser bars between the cups -->
+  <g fill="#fff">
+    <rect x="388" y="580" width="40" height="150" rx="20"/>
+    <rect x="456" y="500" width="40" height="310" rx="20"/>
+    <rect x="524" y="540" width="40" height="230" rx="20"/>
+    <rect x="592" y="610" width="40" height="90" rx="20"/>
+  </g>
+</svg>

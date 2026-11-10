@@ -1,4 +1,4 @@
-import { extractVideoIds, isUserMessage, slackChatPost, verifySlackRequest, type SlackMessage } from "./slack";
+import { extractVideoIds, isUserMessage, slackChatPost, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
 import { fetchVideoMeta } from "./youtube";
 import type { EnqueueItem } from "./station";
 
@@ -38,6 +38,9 @@ async function readVerified(request: Request, env: Env): Promise<string | null> 
   );
   return ok ? raw : null;
 }
+
+/** Emoji name (no colons) added to a message once at least one of its links is in the rotation. */
+const ACK_REACTION = "headphones";
 
 async function announce(env: Env, origin: string, channel: string, token: string): Promise<void> {
   await slackChatPost(
@@ -88,14 +91,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   }
 
   const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items);
-  if (accepted && items.length > 0) {
-    await slackChatPost(
-      env,
-      channel,
-      items.map((i) => `▶️ Added to rotation: *${i.title}*`).join("\n"),
-      threadTs,
-    );
-  }
+  if (accepted && items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
 }
 
 async function slackEvents(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
