@@ -93,7 +93,7 @@ export function Rotation({ token, version, connected, onRemove }: Props) {
 
   return (
     <Win title="ROTATION" className={open ? "" : "closed"}>
-      <button className="btn" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button className="btn quiet" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         {open ? "▲ HIDE ROTATION" : "▼ SHOW ROTATION (remove old entries)"}
       </button>
       {open && (

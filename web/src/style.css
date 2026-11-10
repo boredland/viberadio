@@ -18,7 +18,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
+  background: radial-gradient(ellipse 90% 55% at 50% 0%, #07240f 0%, rgba(2, 6, 4, 0) 70%) fixed, var(--bg);
   color: var(--text);
   font: 14px/1.45 var(--mono);
   display: flex;
@@ -47,12 +47,38 @@ body::after {
   pointer-events: none;
 }
 
+#root { width: 100%; }
+
 .stack {
   position: relative;
   z-index: 1;
   width: min(100%, 440px);
+  margin-inline: auto;
   display: grid;
+  /* A fixed track: an implicit `auto` one sizes to the widest content and pushes the page wider than a narrow phone. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+}
+.col { display: grid; gap: 8px; align-content: start; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.win { min-width: 0; }
+
+@media (max-width: 360px) {
+  .clock { font-size: 30px; }
+  .viz { width: 84px; }
+  .controls { grid-template-columns: auto auto; }
+  .controls .vol { grid-column: 1 / -1; }
+}
+
+/* Wide screens: the player window beside the playlist, like a Winamp rig, instead of one narrow column in a void. */
+@media (min-width: 900px) {
+  .stack.rig {
+    width: min(100%, 920px);
+    grid-template-columns: minmax(0, 440px) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+  }
+  .rig .playlist { max-height: 340px; }
+  .rig .playlist.rotation { max-height: 420px; }
 }
 
 /* ---- Winamp window ---- */
@@ -86,8 +112,9 @@ body::after {
   line-height: 14px;
 }
 
-.win-body { padding: 8px; display: grid; gap: 8px; }
-.win.collapsed .win-body { display: none; }
+.win-body { padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+/* Not just its body: an empty "VIDEO" title bar before tuning in looks like a bug. */
+.win.collapsed { display: none; }
 
 /* ---- LCD ---- */
 .lcd {
@@ -126,6 +153,8 @@ body::after {
 .marquee-probe { position: absolute; visibility: hidden; pointer-events: none; }
 .marquee-run { display: inline-flex; gap: 3em; animation: scroll var(--dur, 12s) linear infinite; padding-right: 3em; }
 @keyframes scroll { to { transform: translateX(-50%); } }
+/* Long titles fade out at the edges instead of being cut dead. Only while scrolling: on a short title the mask would clip it. */
+.marquee:has(.marquee-run) { -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); }
 
 .lcd-info {
   display: flex;
@@ -137,6 +166,10 @@ body::after {
 }
 .tag { color: var(--green); }
 .tag.amber { color: var(--amber); }
+.led-dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: #1d3a29; vertical-align: baseline; }
+.led-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2.4s ease-in-out infinite; }
+.led-dot.warn { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+@keyframes pulse { 50% { opacity: 0.55; } }
 
 .lcd-text { margin: 0; color: var(--green); text-shadow: 0 0 6px rgba(0, 255, 102, 0.6); letter-spacing: 0.1em; }
 .lcd-text.err { color: var(--red); text-shadow: 0 0 6px rgba(255, 77, 77, 0.6); }
@@ -166,7 +199,8 @@ body::after {
 @keyframes sweep { from { transform: translateX(0); } to { transform: translateX(233%); } }
 
 /* ---- buttons ---- */
-.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.controls { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 6px; align-items: center; }
+.controls .btn.amber, .controls .btn.quiet { grid-column: 1 / -1; }
 
 .btn {
   font: 700 12px/1 var(--mono);
@@ -189,6 +223,17 @@ body::after {
 .btn.tune { width: 100%; padding: 14px; font-size: 14px; color: var(--green); text-shadow: 0 0 6px rgba(0, 255, 102, 0.6); }
 .btn.amber { color: var(--amber); }
 .btn.link { display: block; text-align: center; text-decoration: none; }
+/* Secondary toggles: present but not competing with NEXT/MUTE. */
+.btn.quiet {
+  width: 100%;
+  padding: 6px 8px;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--green-dim);
+  background: transparent;
+  box-shadow: inset 1px 1px 0 #1c2a22, inset -1px -1px 0 #000;
+}
+.btn.quiet:hover:not(:disabled), .btn.quiet[aria-pressed="true"] { color: var(--green); }
 
 .shared {
   list-style: none;
@@ -202,12 +247,13 @@ body::after {
 }
 .shared li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 0; }
 
-.vol { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 11px; color: var(--green-dim); letter-spacing: 0.1em; }
+.vol { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--green-dim); letter-spacing: 0.1em; }
+.vol input { flex: 1; min-width: 60px; }
 
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
-  width: 96px;
+  width: 100%;
   height: 8px;
   background: linear-gradient(to right, var(--green) var(--fill, 80%), #000 var(--fill, 80%));
   border: 1px solid #000;
@@ -242,14 +288,16 @@ input[type="range"]::-moz-range-thumb {
 
 /* ---- video ---- */
 .player {
-  width: 240px;
-  height: 240px;
-  margin: 0 auto;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  /* The IFrame API requires the player viewport to be at least 200x200. min-height is the border box, so the 2px of border is
+     added: the iframe inside must itself reach 200. 16:9 fills the window on wide screens instead of letterboxing a square. */
+  min-height: 202px;
   background: #000;
   border: 1px solid #000;
   box-shadow: 0 0 0 1px #0d3d1f, 0 0 18px rgba(0, 255, 102, 0.12);
 }
-.player iframe { display: block; }
+.player iframe { display: block; width: 100%; height: 100%; }
 
 /* ---- playlist ---- */
 .playlist {

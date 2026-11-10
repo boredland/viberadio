@@ -300,7 +300,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   };
 
   return (
-    <main className="stack">
+    <main className="stack rig">
+      <div className="col">
       <Win title="VIBERADIO">
         <div className="lcd">
           <div className="lcd-top">
@@ -312,6 +313,11 @@ export function Station({ token, online }: { token: string; online: boolean }) {
           <Marquee text={ticker} />
           <div className="lcd-info">
             <span className={now?.source === "history" ? "tag amber" : "tag"}>
+              <span
+                className={tuned ? (connected ? "led-dot on" : "led-dot warn") : "led-dot"}
+                role="img"
+                aria-label={tuned ? (connected ? "connected" : "connection lost") : "not tuned in"}
+              />
               {now ? (now.source === "history" ? "↩ HISTORY" : "★ QUEUE") : "IDLE"}
             </span>
             <span>🎧 {pad3(snap?.listeners ?? 0)} LSN</span>
@@ -369,7 +375,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
             )}
             {keepAwake.supported && (
               <button
-                className="btn"
+                className="btn quiet"
                 onClick={keepAwake.toggle}
                 aria-pressed={keepAwake.wanted}
                 aria-label={`Keep screen on${keepAwake.wanted && !keepAwake.active ? " (waiting for the browser)" : ""}`}
@@ -385,7 +391,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
       <Win title="VIDEO" className={tuned ? "" : "collapsed"}>
         <div className="player" ref={hostRef} />
       </Win>
-
+      </div>
+      <div className="col">
       <Win title="PLAYLIST">
         {now || (snap?.queue.length ?? 0) > 0 ? (
           <ol className="playlist">
@@ -424,6 +431,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
           onRemove={(videoId) => connRef.current?.send({ type: "removeVideo", videoId })}
         />
       )}
+      </div>
     </main>
   );
 }
