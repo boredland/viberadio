@@ -6,6 +6,8 @@ const BACKOFF_MAX_MS = 30_000;
 const DRIFT_THRESHOLD_MS = 1000;
 /** After a seek or track load, buffering distorts getCurrentTime; checking sooner causes seek loops. */
 const DRIFT_COOLDOWN_MS = 5000;
+/** Re-report an unacknowledged end after this long; send() silently drops while the socket is down. */
+const END_REPORT_RETRY_MS = 5000;
 /** Slack for clock-offset error and buffering before a track counts as overrun. */
 const OVERRUN_GRACE_MS = 1500;
 
@@ -14,6 +16,8 @@ export type Connection = {
   close(): void;
   /** serverNow − localNow, smoothed. */
   offsetMs(): number;
+  /** True once the first pong has set the clock offset; before that, offsetMs() is 0 and meaningless. */
+  clockSynced(): boolean;
 };
 
 export function connect(
@@ -68,6 +72,7 @@ export function connect(
   return {
     send,
     offsetMs: () => offset,
+    clockSynced: () => haveOffset,
     close() {
       closed = true;
       clearInterval(pingTimer);
@@ -84,10 +89,12 @@ export class PlayerSync {
   private confirmedPlaying = false;
   private quietUntil = 0;
   private latest: StateMessage | null = null;
+  private lastEndReport: { id: string; at: number } | null = null;
 
   constructor(
     private player: YT.Player,
     private offsetMs: () => number,
+    private clockSynced: () => boolean,
   ) {}
 
   private targetMs(startedAtMs: number): number {
@@ -122,19 +129,25 @@ export class PlayerSync {
   }
 
   /**
-   * Id of the current track when it is over but nobody reported it, else null.
-   * Covers an ENDED lost while the socket was down, and a track the station clock has run past its end (unfreeze after a
-   * lost ENDED, or a late joiner): YouTube then flickers at the clamped end and never emits ENDED. The server only
-   * advances on the current id, so re-sending is idempotent.
+   * Id of the current track when it is over but nobody reported it, else null; each id is handed out at most once per
+   * END_REPORT_RETRY_MS. Covers an ENDED lost while the socket was down, and a track the station clock has run past
+   * its end (unfreeze after a lost ENDED, or a late joiner): YouTube then flickers at the clamped end and never emits
+   * ENDED. The server only advances on the current id, so a repeat is harmless.
+   * Overrun needs a measured clock offset: with offset 0 a skewed client would end a playing track for everyone.
    */
-  pendingEndId(): string | null {
+  takePendingEndId(): string | null {
     const now = this.latest?.now;
     const id = this.endedId();
     if (!now || !id) return null;
-    if (this.player.getPlayerState() === window.YT!.PlayerState.ENDED) return id;
-    const durationMs = this.player.getDuration() * 1000;
-    if (Date.now() < this.quietUntil || durationMs <= 0) return null;
-    return this.targetMs(now.startedAtMs) > durationMs + OVERRUN_GRACE_MS ? id : null;
+    if (this.lastEndReport?.id === id && Date.now() - this.lastEndReport.at < END_REPORT_RETRY_MS) return null;
+    const ended = this.player.getPlayerState() === window.YT!.PlayerState.ENDED;
+    if (!ended) {
+      const durationMs = this.player.getDuration() * 1000;
+      if (!this.clockSynced() || Date.now() < this.quietUntil || durationMs <= 0) return null;
+      if (this.targetMs(now.startedAtMs) <= durationMs + OVERRUN_GRACE_MS) return null;
+    }
+    this.lastEndReport = { id, at: Date.now() };
+    return id;
   }
 
   checkDrift(): void {

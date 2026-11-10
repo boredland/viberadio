@@ -63,7 +63,7 @@ export function Station({ token }: { token: string }) {
     const check = () => {
       const sync = syncRef.current;
       sync?.checkDrift();
-      const overdue = sync?.pendingEndId();
+      const overdue = sync?.takePendingEndId();
       if (overdue) connRef.current?.send({ type: "ended", id: overdue });
     };
     const onVisible = () => document.visibilityState === "visible" && check();
@@ -90,7 +90,7 @@ export function Station({ token }: { token: string }) {
         setSnap(s);
         const sync = syncRef.current;
         sync?.apply(s);
-        const overdue = sync?.pendingEndId();
+        const overdue = sync?.takePendingEndId();
         if (overdue) conn.send({ type: "ended", id: overdue });
       },
       setConnected,
@@ -100,7 +100,7 @@ export function Station({ token }: { token: string }) {
     const player = createPlayer(host, {
       onReady: () => {
         player.setVolume(volumeRef.current);
-        syncRef.current = new PlayerSync(player, conn.offsetMs);
+        syncRef.current = new PlayerSync(player, conn.offsetMs, conn.clockSynced);
         if (latestRef.current) syncRef.current.apply(latestRef.current);
       },
       onPlaying: () => syncRef.current?.markPlaying(),
