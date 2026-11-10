@@ -76,7 +76,11 @@ export function Station({ token }: { token: string }) {
       if (overdue) connRef.current?.send({ type: "ended", id: overdue });
       if (sync) setNeedsTap(sync.resumeIfPaused());
     };
-    const onVisible = () => document.visibilityState === "visible" && check();
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      syncRef.current?.onPageVisible();
+      check();
+    };
     const drift = setInterval(check, DRIFT_TICK_MS);
     const ui = setInterval(() => setTick((t) => t + 1), UI_TICK_MS);
     document.addEventListener("visibilitychange", onVisible);

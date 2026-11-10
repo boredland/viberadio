@@ -16,6 +16,8 @@ const OVERRUN_GRACE_MS = 1500;
  * live socket's pong is delivered before the late timer runs, so a backgrounded tab cannot trip this falsely.
  */
 const PONG_DEADLINE_MS = 10_000;
+/** A CONNECTING socket younger than this is a live dial, not a stuck one. */
+const CONNECT_STALE_MS = 5000;
 /** A paused player is nudged at most this often, so a browser that refuses playback is not hammered. */
 const RESUME_THROTTLE_MS = 2000;
 /** Silent resume attempts before the UI is asked for a tap (autoplay policy blocks playback without a gesture). */
@@ -45,6 +47,9 @@ export function connect(
   let pongTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /** When the current socket was dialled; a wake fires several events at once and a fresh dial must survive them. */
+  let dialAt = 0;
+
   const send = (msg: ClientMessage) => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   };
@@ -60,6 +65,7 @@ export function connect(
 
   const open = () => {
     clearTimeout(retryTimer);
+    dialAt = Date.now();
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const sock = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(token)}`);
     ws = sock;
@@ -115,9 +121,10 @@ export function connect(
   const probe = () => {
     if (closed) return;
     const s = ws?.readyState;
-    // CONNECTING counts too: a dial started before sleep may never complete, and nothing else times it out.
-    if (s === undefined || s === WebSocket.CONNECTING || s === WebSocket.CLOSING || s === WebSocket.CLOSED) reconnectNow();
-    else if (s === WebSocket.OPEN) ping();
+    if (s === WebSocket.OPEN) return ping();
+    if (s === WebSocket.CONNECTING && Date.now() - dialAt < CONNECT_STALE_MS) return;
+    // A dial begun before sleep may never complete and nothing else times it out, so a stale CONNECTING one is replaced too.
+    reconnectNow();
   };
   const onVisible = () => document.visibilityState === "visible" && probe();
   document.addEventListener("visibilitychange", onVisible);
@@ -193,6 +200,8 @@ export class PlayerSync {
    * and nothing tells the page to resume. If the station says a track is on but the player is not running, seek back to
    * the station position and play. Returns true once silent attempts are used up, so the UI can ask for a tap.
    * `user` bypasses the throttle and the attempt cap: a tap is the gesture the autoplay policy wants.
+   * While the page is hidden the attempt is made but not counted: a locked phone refuses playback, and those refusals
+   * would use up the budget before the listener is even back to see the tap button.
    */
   resumeIfPaused(user = false): boolean {
     const now = this.latest?.now;
@@ -210,13 +219,19 @@ export class PlayerSync {
       if (t < this.quietUntil) return false;
       if (this.resumeAttempts >= MAX_RESUME_ATTEMPTS) return true;
       if (t - this.lastResumeAt < RESUME_THROTTLE_MS) return false;
-      this.resumeAttempts++;
+      if (!document.hidden) this.resumeAttempts++;
     }
     this.lastResumeAt = t;
     // Seek while paused, then play: the other order restarts audio at the stale position first.
     if (this.clockSynced()) this.player.seekTo(Math.max(0, this.targetMs(now.startedAtMs) / 1000), true);
     this.player.playVideo();
     return false;
+  }
+
+  /** The page just became visible: previous refusals say nothing about whether playback is allowed now, so retry fresh. */
+  onPageVisible(): void {
+    this.resumeAttempts = 0;
+    this.lastResumeAt = 0;
   }
 
   /** Id to report for an ENDED event, or null when it can only belong to the previous video. */

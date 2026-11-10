@@ -1,9 +1,10 @@
 import type { CurrentTrack } from "../../shared/protocol";
 
 /**
- * Lock-screen / notification metadata and Next. Without an active media session mobile browsers treat the page as
- * background content and suspend it much sooner; with one, the OS keeps it alive as "playing audio".
- * Only Next is wired: play/pause/seek would let one listener desync themselves from the station clock.
+ * Lock-screen / notification metadata and Next, set on the top-level page.
+ * The audio is produced inside YouTube's cross-origin iframe, and which frame the OS media controls attach to is
+ * browser-dependent: these may be ignored or overridden by the iframe's own session. Treat them as best-effort.
+ * Only Next and Play are wired: pause/seek would let one listener desync themselves from the station clock.
  */
 export function setNowPlaying(track: CurrentTrack | null): void {
   if (!("mediaSession" in navigator)) return;
