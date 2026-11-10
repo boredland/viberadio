@@ -45,7 +45,8 @@ const BACKFILL_PAGE_DELAY_MS = 1500;
 const BACKFILL_DEFAULT_RETRY_S = 60;
 const FATAL_PLAYER_ERRORS = new Set([100, 101, 150]);
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
-const TITLE_MISS_TTL_MS = 10 * 60_000;
+// Short: fetchVideoMeta returns null for any failure, so a transient error must not hide a title for long.
+const TITLE_MISS_TTL_MS = 2 * 60_000;
 
 export class Station extends DurableObject<Env> {
   private state: StationState | null = null;
@@ -294,6 +295,8 @@ export class Station extends DurableObject<Env> {
       .exec<LibraryRow>("SELECT * FROM library WHERE dead=0 ORDER BY first_ts DESC, seq DESC LIMIT ? OFFSET ?", limit, offset)
       .toArray();
     const now = Date.now();
+    // Expired entries are dropped here so the map cannot outgrow the set of currently unavailable videos.
+    if (this.titleMisses.size > 100) for (const [id, until] of this.titleMisses) if (until < now) this.titleMisses.delete(id);
     const missing = page.filter((r) => r.title === null && (this.titleMisses.get(r.video_id) ?? 0) < now);
     const metas = await Promise.all(missing.map((r) => fetchVideoMeta(r.video_id)));
     missing.forEach((r, i) => {
@@ -362,7 +365,8 @@ export class Station extends DurableObject<Env> {
       if (title === null) {
         const meta = await fetchVideoMeta(row.video_id);
         if (!meta) {
-          sql.exec("UPDATE library SET dead=1 WHERE video_id=?", row.video_id);
+          // `AND title IS NULL`: a re-post during the lookup revived the row and may have titled it; do not kill that.
+          sql.exec("UPDATE library SET dead=1 WHERE video_id=? AND title IS NULL", row.video_id);
           continue;
         }
         ({ title, author, thumbnailUrl } = meta);

@@ -404,8 +404,9 @@ export function Station({ token, online }: { token: string; online: boolean }) {
       {tuned && (
         <Rotation
           token={token}
-          // Library size plus the playing/queued ids: changes on any add or removal, and on every track change.
-          version={`${snap?.librarySize ?? 0}:${snap?.now?.id ?? ""}:${snap?.queue.length ?? 0}`}
+          // Only the size of the rotation: it changes on any add or removal. The playing/queued track is deliberately not
+          // part of it, or every track change would refetch every shown page (each can trigger title lookups).
+          version={`${snap?.librarySize ?? 0}`}
           connected={connected}
           onRemove={(videoId) => connRef.current?.send({ type: "removeVideo", videoId })}
         />
