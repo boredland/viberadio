@@ -200,12 +200,16 @@ export class PlayerSync {
    * and nothing tells the page to resume. If the station says a track is on but the player is not running, seek back to
    * the station position and play. Returns true once silent attempts are used up, so the UI can ask for a tap.
    * `user` bypasses the throttle and the attempt cap: a tap is the gesture the autoplay policy wants.
-   * While the page is hidden the attempt is made but not counted: a locked phone refuses playback, and those refusals
-   * would use up the budget before the listener is even back to see the tap button.
+   *
+   * Never acts while the page is hidden. YouTube's developer policy bars playing from a background player (one not
+   * displayed in the page, tab or screen the user is viewing), and pushing playVideo() at a hidden page is exactly an
+   * attempt to override the pause the platform applied. The resume happens when the page becomes visible again
+   * (onPageVisible + the visibilitychange check in Station.tsx).
    */
   resumeIfPaused(user = false): boolean {
     const now = this.latest?.now;
     if (!now) return false;
+    if (document.hidden) return false;
     const state = this.player.getPlayerState();
     const S = window.YT!.PlayerState;
     if (state === S.PLAYING) {
@@ -219,7 +223,7 @@ export class PlayerSync {
       if (t < this.quietUntil) return false;
       if (this.resumeAttempts >= MAX_RESUME_ATTEMPTS) return true;
       if (t - this.lastResumeAt < RESUME_THROTTLE_MS) return false;
-      if (!document.hidden) this.resumeAttempts++;
+      this.resumeAttempts++;
     }
     this.lastResumeAt = t;
     // Seek while paused, then play: the other order restarts audio at the stale position first.
