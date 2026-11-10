@@ -14,8 +14,8 @@ type StationState = {
   pausedAtMs: number | null;
   /** Fresh posts, FIFO. */
   queue: Track[];
-  /** Last history row played. */
-  rotationCursor: { ts: string; seq: number } | null;
+  /** Shuffle-bag generation: a history track is eligible while its `played_cycle` is below this. Absent = 1 (stations from before shuffling). */
+  rotationCycle?: number;
   backfill: { cursor: string | null; done: boolean; error: string | null; failures?: number };
   /** One-off pass that fills in posters on rows indexed before attribution existed; absent when not running. */
   refill?: { cursor: string | null; failures?: number };
@@ -97,6 +97,10 @@ export class Station extends DurableObject<Env> {
       ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN added_by_id TEXT");
       ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN added_by TEXT");
     }
+    // Shuffle bag: the cycle in which a track last played. New rows default to 0, so a fresh post is always in the current bag.
+    if (!cols.some((c) => c.name === "played_cycle")) {
+      ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN played_cycle INTEGER NOT NULL DEFAULT 0");
+    }
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get<StationState>("state")) ?? null;
       const s = this.state;
@@ -126,7 +130,6 @@ export class Station extends DurableObject<Env> {
       current: null,
       pausedAtMs: null,
       queue: [],
-      rotationCursor: null,
       backfill: { cursor: null, done: false, error: null },
       seenEventIds: [],
     };
@@ -436,33 +439,33 @@ export class Station extends DurableObject<Env> {
   private async pickNext(prevVideoId: string | null): Promise<Track | null> {
     const s = this.st();
     const queued = s.queue.shift();
-    if (queued) return queued;
+    if (queued) {
+      // A fresh post that plays from the queue counts as played this cycle, or it would come round again straight away.
+      this.ctx.storage.sql.exec("UPDATE library SET played_cycle=? WHERE video_id=?", s.rotationCycle ?? 1, queued.videoId);
+      return queued;
+    }
     if (!s.backfill.done) return null;
 
     const sql = this.ctx.storage.sql;
-    let cursor = s.rotationCursor;
-    let skippedPrev = false;
+    let cycle = s.rotationCycle ?? 1;
+    // Random pick among tracks not yet played this cycle. The previous track is excluded so a cycle boundary cannot repeat it.
+    const draw = (exclude: string): LibraryRow | undefined =>
+      sql
+        .exec<LibraryRow>(
+          "SELECT * FROM library WHERE dead=0 AND played_cycle < ?1 AND video_id != ?2 ORDER BY RANDOM() LIMIT 1",
+          cycle,
+          exclude,
+        )
+        .toArray()[0];
     for (let examined = 0; examined < MAX_ROWS_EXAMINED; examined++) {
-      let row: LibraryRow | undefined = cursor
-        ? sql
-            .exec<LibraryRow>(
-              `SELECT * FROM library WHERE dead=0 AND (first_ts > ?1 OR (first_ts = ?1 AND seq > ?2)) ORDER BY first_ts, seq LIMIT 1`,
-              cursor.ts,
-              cursor.seq,
-            )
-            .toArray()[0]
-        : undefined;
-      row ??= sql.exec<LibraryRow>("SELECT * FROM library WHERE dead=0 ORDER BY first_ts, seq LIMIT 1").toArray()[0];
-      if (!row) return null;
-      cursor = { ts: row.first_ts, seq: row.seq };
-
-      if (row.video_id === prevVideoId && !skippedPrev) {
-        const alive = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE dead=0").one().n;
-        if (alive > 1) {
-          skippedPrev = true;
-          continue;
-        }
+      let row = draw(prevVideoId ?? "");
+      if (!row) {
+        // Bag empty: everything has played, so start a new cycle. With a single track left alive it is the only choice.
+        cycle++;
+        s.rotationCycle = cycle;
+        row = draw(prevVideoId ?? "") ?? draw("");
       }
+      if (!row) return null;
 
       let { title, author, thumbnail_url: thumbnailUrl } = row;
       if (title === null) {
@@ -488,7 +491,7 @@ export class Station extends DurableObject<Env> {
       const addedBy = await this.adderName(row.video_id, row.added_by_id, row.added_by);
       const stillAlive = sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE video_id=? AND dead=0", row.video_id).one().n;
       if (stillAlive === 0) continue;
-      s.rotationCursor = cursor;
+      sql.exec("UPDATE library SET played_cycle=? WHERE video_id=?", cycle, row.video_id);
       return {
         id: `${Date.now()}-${row.video_id}`,
         videoId: row.video_id,
@@ -499,8 +502,6 @@ export class Station extends DurableObject<Env> {
         addedBy,
       };
     }
-    // Keep the position so the next call continues past the rows just examined.
-    s.rotationCursor = cursor;
     return null;
   }
 
