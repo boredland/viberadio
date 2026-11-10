@@ -63,13 +63,6 @@ body::after {
 .col { display: grid; gap: 8px; align-content: start; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .win { min-width: 0; }
 
-@media (max-width: 360px) {
-  .clock { font-size: 30px; }
-  .viz { width: 84px; }
-  .controls { grid-template-columns: auto auto; }
-  .controls .vol { grid-column: 1 / -1; }
-}
-
 /* Wide screens: the player window beside the playlist, like a Winamp rig, instead of one narrow column in a void. */
 @media (min-width: 900px) {
   .stack.rig {
@@ -345,5 +338,13 @@ input[type="range"]::-moz-range-thumb {
 .logo { margin: 0 0 6px; color: var(--green); text-shadow: 0 0 10px rgba(0, 255, 102, 0.7); font-size: 11px; line-height: 1.1; letter-spacing: 0; overflow-x: auto; }
 
 @media (prefers-reduced-motion: reduce) {
-  .marquee-run, .blink, .seek.indeterminate .seek-fill { animation: none; }
+  .marquee-run, .blink, .seek.indeterminate .seek-fill, .led-dot.on { animation: none; }
+}
+
+/* Last on purpose: these override base rules of equal specificity (.clock, .viz, .controls), so source order decides. */
+@media (max-width: 360px) {
+  .clock { font-size: 30px; }
+  .viz { width: 84px; }
+  .controls { grid-template-columns: auto auto; }
+  .controls .vol { grid-column: 1 / -1; }
 }
