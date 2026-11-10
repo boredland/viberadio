@@ -109,6 +109,11 @@ export function Rotation({ token, version, connected, onRemove }: Props) {
                     <span className="t">
                       {label} {r.author && <small>— {r.author}</small>}
                     </span>
+                    {r.addedBy && (
+                      <span className="by" title={`Added by ${r.addedBy}`}>
+                        +{r.addedBy}
+                      </span>
+                    )}
                     <button
                       className={isArmed ? "x armed" : "x"}
                       disabled={!connected}

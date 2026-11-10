@@ -16,7 +16,7 @@
     ]
   },
   "oauth_config": {
-    "scopes": { "bot": ["channels:history", "channels:read", "chat:write", "commands", "reactions:write"] }
+    "scopes": { "bot": ["channels:history", "channels:read", "chat:write", "commands", "reactions:write", "users:read"] }
   },
   "settings": {
     "event_subscriptions": {

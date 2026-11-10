@@ -6,6 +6,12 @@ export type Track = {
   author: string;
   thumbnailUrl: string;
   source: "queue" | "history";
+  /**
+   * Display name of who added it ("web share" for the PWA share target), or null when unknown: Slack names need the
+   * users:read scope, and rows indexed before attribution existed have no poster. Optional because persisted station
+   * state from before this field existed lacks it.
+   */
+  addedBy?: string | null;
 };
 
 export type CurrentTrack = Track & { startedAtMs: number };
@@ -32,6 +38,6 @@ export type ClientMessage =
   /** Same, by video id: for entries that exist only in the history rotation and have no queue/current Track id. */
   | { type: "removeVideo"; videoId: string };
 
-export type LibraryRow = { videoId: string; title: string | null; author: string | null };
+export type LibraryRow = { videoId: string; title: string | null; author: string | null; addedBy: string | null };
 /** GET /api/station/:token/library: one page of the rotation, newest post first. */
 export type LibraryPage = { rows: LibraryRow[]; total: number; offset: number };

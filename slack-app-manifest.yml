@@ -19,6 +19,7 @@ oauth_config:
       - chat:write
       - commands
       - reactions:write
+      - users:read
 settings:
   event_subscriptions:
     request_url: https://slackdj.jonas-strassel.de/slack/events

@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { ClientMessage, CurrentTrack, LibraryPage, ServerMessage, StateMessage, Track } from "../../shared/protocol";
 import type { Env } from "./index";
 import { extractVideoIds } from "../../shared/video";
+import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
 import { fetchVideoMeta } from "./youtube";
 
@@ -16,6 +17,8 @@ type StationState = {
   /** Last history row played. */
   rotationCursor: { ts: string; seq: number } | null;
   backfill: { cursor: string | null; done: boolean; error: string | null };
+  /** One-off pass that fills in posters on rows indexed before attribution existed; absent when not running. */
+  refill?: { cursor: string | null };
   /** Ring buffer, cap SEEN_CAP. */
   seenEventIds: string[];
 };
@@ -28,6 +31,10 @@ type LibraryRow = {
   author: string | null;
   thumbnail_url: string | null;
   dead: number;
+  /** Slack user id of the poster, "web" for the share target, null when unknown (indexed before attribution). */
+  added_by_id: string | null;
+  /** Resolved display name, cached so a name is looked up once per person, not once per play. */
+  added_by: string | null;
 };
 
 export type EnqueueItem = {
@@ -37,6 +44,9 @@ export type EnqueueItem = {
   author: string;
   thumbnailUrl: string;
 };
+
+/** Who posted: the Slack user id (null for the share target) and their display name when it could be resolved. */
+export type Adder = { id: string | null; name: string | null };
 
 const SEEN_CAP = 500;
 /** Workers Free allows 50 subrequests per invocation; stay well under. */
@@ -66,8 +76,24 @@ export class Station extends DurableObject<Env> {
       );
       CREATE INDEX IF NOT EXISTS library_order ON library(first_ts, seq);
     `);
+    // Attribution columns arrived after the table did, so existing stations need them added. SQLite has no
+    // ADD COLUMN IF NOT EXISTS, hence the pragma check. A station that already finished indexing re-reads the channel
+    // once to learn who posted each link; `refill` tracks that pass separately from `backfill`, because `backfill.done`
+    // gates history rotation and a complete station must keep playing while it runs.
+    const cols = ctx.storage.sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('library')").toArray();
+    const addedAttribution = !cols.some((c) => c.name === "added_by_id");
+    if (addedAttribution) {
+      ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN added_by_id TEXT");
+      ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN added_by TEXT");
+    }
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get<StationState>("state")) ?? null;
+      const s = this.state;
+      if (addedAttribution && s?.backfill.done && !s.backfill.error) {
+        s.refill = { cursor: null };
+        await ctx.storage.put("state", s);
+        await ctx.storage.setAlarm(Date.now());
+      }
     });
   }
 
@@ -108,6 +134,7 @@ export class Station extends DurableObject<Env> {
     eventId: string,
     messageTs: string,
     items: EnqueueItem[],
+    adder: Adder = { id: null, name: null },
   ): Promise<{ accepted: boolean }> {
     await this.init(teamId, channelId);
     const s = this.st();
@@ -123,17 +150,22 @@ export class Station extends DurableObject<Env> {
         author: it.author,
         thumbnailUrl: it.thumbnailUrl,
         source: "queue",
+        addedBy: adder.name,
       });
-      // Keeps the original first_ts; re-posting a link revives a dead row.
+      // Keeps the original first_ts; re-posting a link revives a dead row and credits the person who brought it back.
       this.ctx.storage.sql.exec(
-        `INSERT INTO library(video_id, first_ts, seq, title, author, thumbnail_url, dead) VALUES (?,?,?,?,?,?,0)
-         ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, author=excluded.author, thumbnail_url=excluded.thumbnail_url, dead=0`,
+        `INSERT INTO library(video_id, first_ts, seq, title, author, thumbnail_url, dead, added_by_id, added_by) VALUES (?,?,?,?,?,?,0,?,?)
+         ON CONFLICT(video_id) DO UPDATE SET title=excluded.title, author=excluded.author, thumbnail_url=excluded.thumbnail_url, dead=0,
+           added_by_id=COALESCE(excluded.added_by_id, library.added_by_id),
+           added_by=CASE WHEN excluded.added_by_id IS NOT NULL THEN excluded.added_by ELSE library.added_by END`,
         it.videoId,
         messageTs,
         it.seq,
         it.title,
         it.author,
         it.thumbnailUrl,
+        adder.id,
+        adder.name,
       );
     }
     await this.persist();
@@ -310,7 +342,39 @@ export class Station extends DurableObject<Env> {
       // `dead=0` guard: a removal during the lookups above must not be touched by a late title write.
       sql.exec("UPDATE library SET title=?, author=?, thumbnail_url=? WHERE video_id=? AND dead=0", m.title, m.author, m.thumbnailUrl, r.video_id);
     });
-    return { total, offset, rows: page.map((r) => ({ videoId: r.video_id, title: r.title, author: r.author })) };
+    await this.fillNames(page);
+    return {
+      total,
+      offset,
+      rows: page.map((r) => ({ videoId: r.video_id, title: r.title, author: r.author, addedBy: r.added_by })),
+    };
+  }
+
+  /**
+   * Names are looked up lazily and stored on the row, so a poster costs one Slack call ever, not one per play or listing.
+   * `WEB_ADDER` rows carry the label directly. A row whose lookup fails keeps a null name and is retried by the name
+   * cache's short miss TTL, not on every request.
+   */
+  private async adderName(videoId: string, id: string | null, name: string | null): Promise<string | null> {
+    if (name || !id) return name;
+    if (id === "web") return WEB_ADDER;
+    const resolved = await resolveSlackName(this.env, id);
+    if (resolved) this.ctx.storage.sql.exec("UPDATE library SET added_by=? WHERE video_id=? AND added_by IS NULL", resolved, videoId);
+    return resolved;
+  }
+
+  /** Resolves missing names for a page of rows, one lookup per distinct poster. */
+  private async fillNames(rows: LibraryRow[]): Promise<void> {
+    const need = [...new Set(rows.filter((r) => !r.added_by && r.added_by_id && r.added_by_id !== "web").map((r) => r.added_by_id!))];
+    const names = await Promise.all(need.map((id) => resolveSlackName(this.env, id)));
+    const byId = new Map(need.map((id, i) => [id, names[i]]));
+    for (const r of rows) {
+      if (r.added_by || !r.added_by_id) continue;
+      const n = r.added_by_id === "web" ? WEB_ADDER : (byId.get(r.added_by_id) ?? null);
+      if (!n) continue;
+      r.added_by = n;
+      this.ctx.storage.sql.exec("UPDATE library SET added_by=? WHERE video_id=? AND added_by IS NULL", n, r.video_id);
+    }
   }
 
   private async unfreeze(): Promise<void> {
@@ -391,6 +455,7 @@ export class Station extends DurableObject<Env> {
         author: author ?? "",
         thumbnailUrl: thumbnailUrl ?? "",
         source: "history",
+        addedBy: await this.adderName(row.video_id, row.added_by_id, row.added_by),
       };
     }
     // Keep the position so the next call continues past the rows just examined.
@@ -402,25 +467,36 @@ export class Station extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     const s = this.state;
-    if (!s || s.backfill.done) return;
+    if (!s) return;
+    // The first-time backfill wins: it creates the rows the refill would annotate.
+    if (!s.backfill.done) return this.runBackfill(s);
+    if (s.refill) return this.runRefill(s);
+  }
 
+  /** One conversations.history page. Returns null after scheduling a retry (429), so callers just stop. */
+  private async readHistoryPage(s: StationState, cursor: string | null) {
     const res = await slackApi("conversations.history", this.env.SLACK_BOT_TOKEN, {
       channel: s.channelId,
       limit: "200",
-      ...(s.backfill.cursor ? { cursor: s.backfill.cursor } : {}),
+      ...(cursor ? { cursor } : {}),
     });
     if (res.status === 429) {
       const wait = Number(res.headers.get("Retry-After")) || BACKFILL_DEFAULT_RETRY_S;
       await this.ctx.storage.setAlarm(Date.now() + wait * 1000);
-      return;
+      return null;
     }
-    const body = (await res.json()) as {
+    return (await res.json()) as {
       ok: boolean;
       error?: string;
       messages?: SlackMessage[];
       has_more?: boolean;
       response_metadata?: { next_cursor?: string };
     };
+  }
+
+  private async runBackfill(s: StationState): Promise<void> {
+    const body = await this.readHistoryPage(s, s.backfill.cursor);
+    if (!body) return;
     if (!body.ok) {
       // not_in_channel / missing_scope do not fix themselves; live links still work.
       console.error("conversations.history failed:", body.error);
@@ -429,12 +505,16 @@ export class Station extends DurableObject<Env> {
       for (const m of body.messages ?? []) {
         if (!isUserMessage(m) || !m.ts) continue;
         extractVideoIds(m.text ?? "").forEach((videoId, seq) => {
+          // Newest-first pages: a video posted twice is seen newest first, so the older post overwrites when it arrives.
+          // The poster travels with the earliest post, matching `first_ts`, so "who added it" means who first did.
           this.ctx.storage.sql.exec(
-            `INSERT INTO library(video_id, first_ts, seq) VALUES (?,?,?)
-             ON CONFLICT(video_id) DO UPDATE SET first_ts=excluded.first_ts, seq=excluded.seq WHERE excluded.first_ts < library.first_ts`,
+            `INSERT INTO library(video_id, first_ts, seq, added_by_id) VALUES (?,?,?,?)
+             ON CONFLICT(video_id) DO UPDATE SET first_ts=excluded.first_ts, seq=excluded.seq, added_by_id=excluded.added_by_id, added_by=NULL
+             WHERE excluded.first_ts < library.first_ts`,
             videoId,
             m.ts,
             seq,
+            m.user ?? null,
           );
         });
       }
@@ -448,6 +528,42 @@ export class Station extends DurableObject<Env> {
     }
     await this.persist();
     await this.maybeStart();
+    this.broadcast();
+  }
+
+  /**
+   * Fills in `added_by_id` for rows indexed before attribution existed. It reads the same history but only sets the poster,
+   * and only where it is unknown: `first_ts` and everything else stay as they are, and rotation (gated on
+   * `backfill.done`, still true) never pauses.
+   */
+  private async runRefill(s: StationState): Promise<void> {
+    const body = await this.readHistoryPage(s, s.refill?.cursor ?? null);
+    if (!body) return;
+    if (!body.ok) {
+      console.error("refill: conversations.history failed:", body.error);
+      delete s.refill;
+    } else {
+      for (const m of body.messages ?? []) {
+        if (!isUserMessage(m) || !m.ts || !m.user) continue;
+        for (const videoId of extractVideoIds(m.text ?? "")) {
+          // Only the earliest post of each video names its adder: match on first_ts, and never overwrite a known poster.
+          this.ctx.storage.sql.exec(
+            "UPDATE library SET added_by_id=? WHERE video_id=? AND first_ts=? AND added_by_id IS NULL",
+            m.user,
+            videoId,
+            m.ts,
+          );
+        }
+      }
+      const next = body.response_metadata?.next_cursor;
+      if (body.has_more && next) {
+        s.refill = { cursor: next };
+        await this.ctx.storage.setAlarm(Date.now() + BACKFILL_PAGE_DELAY_MS);
+      } else {
+        delete s.refill;
+      }
+    }
+    await this.persist();
     this.broadcast();
   }
 

@@ -37,6 +37,7 @@ export type SlackMessage = {
   type?: string;
   subtype?: string;
   bot_id?: string;
+  user?: string;
   text?: string;
   ts?: string;
   thread_ts?: string;
@@ -46,11 +47,17 @@ export function isUserMessage(m: SlackMessage): boolean {
   return m.type === "message" && m.subtype === undefined && m.bot_id === undefined;
 }
 
-export function slackApi(method: string, token: string, params: Record<string, string>): Promise<Response> {
+export function slackApi(
+  method: string,
+  token: string,
+  params: Record<string, string>,
+  timeoutMs?: number,
+): Promise<Response> {
   return fetch(`https://slack.com/api/${method}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: new URLSearchParams(params),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
 }
 

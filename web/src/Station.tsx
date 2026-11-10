@@ -323,6 +323,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
             <span>🎧 {pad3(snap?.listeners ?? 0)} LSN</span>
             <span>{pad3(snap?.librarySize ?? 0)} TRK</span>
             <span>{duration > 0 ? fmtLcd(duration * 1000) : "--:--"} LEN</span>
+            {now?.addedBy && <span className="by-lcd">ADDED BY {now.addedBy.toUpperCase()}</span>}
           </div>
         </div>
 
@@ -402,6 +403,11 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                 <span className="t">
                   {now.title} <small>— {now.author}</small>
                 </span>
+                {now.addedBy && (
+                  <span className="by" title={`Added by ${now.addedBy}`}>
+                    +{now.addedBy}
+                  </span>
+                )}
                 <span className="d">{duration > 0 ? fmtLcd(duration * 1000) : ""}</span>
                 {removeButton(now.id, now.title)}
               </li>
@@ -412,6 +418,11 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                 <span className="t">
                   {t.title} <small>— {t.author}</small>
                 </span>
+                {t.addedBy && (
+                  <span className="by" title={`Added by ${t.addedBy}`}>
+                    +{t.addedBy}
+                  </span>
+                )}
                 {removeButton(t.id, t.title)}
               </li>
             ))}

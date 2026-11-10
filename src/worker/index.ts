@@ -1,4 +1,5 @@
 import { extractVideoIds } from "../../shared/video";
+import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackChatPost, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
 import { fetchVideoMeta } from "./youtube";
 import type { EnqueueItem } from "./station";
@@ -85,7 +86,8 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   }
 
   // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
-  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items);
+  const adder = { id: event.user ?? null, name: await resolveSlackName(env, event.user) };
+  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items, adder);
   if (!accepted) return;
   if (items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
   for (const videoId of unavailable) {
@@ -175,7 +177,9 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
     new TextEncoder().encode(`${window30}:${items.map((i) => i.videoId).join(",")}`),
   );
   const eventId = `web-${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-  const { accepted } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items);
+  // The share target has no identity, so it is credited to the label "web share" instead of a person.
+  const adder = { id: "web", name: WEB_ADDER };
+  const { accepted } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder);
   return json({ added: items.map((i) => ({ videoId: i.videoId, title: i.title })), unavailable, duplicate: !accepted });
 }
 
