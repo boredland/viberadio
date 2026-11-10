@@ -41,12 +41,13 @@ export function useKeepAwake(listening: boolean) {
     void s?.release().catch(() => {});
   }, []);
 
-  const acquire = useCallback(async () => {
+  const acquire = useCallback(async (live: () => boolean) => {
     if (!wakeLockSupported() || sentinel.current || document.visibilityState !== "visible") return;
     try {
       const s = await navigator.wakeLock.request("screen");
-      // The wanted/listening state may have changed while the request was pending: do not keep a lock nobody asked for.
-      if (sentinel.current || document.visibilityState !== "visible") return void s.release().catch(() => {});
+      // The request can resolve after the listener turned the toggle off, left the station, or hid the page. Holding the
+      // lock then would keep the screen on with nothing asking for it, so hand it straight back.
+      if (!live() || sentinel.current || document.visibilityState !== "visible") return void s.release().catch(() => {});
       sentinel.current = s;
       setActive(true);
       s.addEventListener("release", () => {
@@ -63,10 +64,14 @@ export function useKeepAwake(listening: boolean) {
 
   useEffect(() => {
     if (!(wanted && listening)) return release();
-    void acquire();
-    const onVisible = () => document.visibilityState === "visible" && void acquire();
+    // One flag per effect run: cleanup flips it, so a request still pending from this run cannot keep a lock afterwards.
+    let live = true;
+    const isLive = () => live;
+    void acquire(isLive);
+    const onVisible = () => document.visibilityState === "visible" && void acquire(isLive);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      live = false;
       document.removeEventListener("visibilitychange", onVisible);
       release();
     };

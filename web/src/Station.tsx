@@ -372,6 +372,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                 className="btn"
                 onClick={keepAwake.toggle}
                 aria-pressed={keepAwake.wanted}
+                aria-label={`Keep screen on${keepAwake.wanted && !keepAwake.active ? " (waiting for the browser)" : ""}`}
                 title="Stops the screen from turning off so the player keeps playing. Uses more battery."
               >
                 {keepAwake.wanted ? (keepAwake.active ? "SCREEN ON ✓" : "SCREEN ON …") : "KEEP SCREEN ON"}
