@@ -259,7 +259,8 @@ export class Station extends DurableObject<Env> {
     s.queue = s.queue.filter((t) => t.videoId !== target.videoId);
     s.seenEventIds = s.seenEventIds.filter((e) => !e.startsWith("web-"));
     await this.persist();
-    if (s.current?.id === id) await this.advance(id);
+    // By video, not slot: removing a queued copy of what is playing right now must stop it too.
+    if (s.current?.videoId === target.videoId) await this.advance(s.current.id);
     else this.broadcast();
   }
 
