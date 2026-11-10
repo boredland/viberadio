@@ -1,0 +1,25 @@
+{
+  "name": "viberadio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build -c web/vite.config.ts && wrangler dev",
+    "build": "vite build -c web/vite.config.ts",
+    "deploy": "vite build -c web/vite.config.ts && wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261110.1",
+    "@slack/cli-hooks": "^2.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "wrangler": "^4.160.0"
+  }
+}

@@ -1,0 +1,4 @@
+SLACK_BOT_TOKEN=
+SLACK_SIGNING_SECRET=
+# Optional: reject events from any other workspace
+SLACK_TEAM_ID=

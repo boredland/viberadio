@@ -1,0 +1,27 @@
+display_information:
+  name: viberadio
+features:
+  bot_user:
+    display_name: viberadio
+    always_online: true
+  slash_commands:
+    - command: /viberadio
+      url: https://slackdj.jonas-strassel.de/slack/commands
+      description: Get this channel's radio tune-in link
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - channels:read
+      - chat:write
+      - commands
+settings:
+  event_subscriptions:
+    request_url: https://slackdj.jonas-strassel.de/slack/events
+    bot_events:
+      - message.channels
+      - member_joined_channel
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

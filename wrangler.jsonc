@@ -1,0 +1,19 @@
+{
+  "name": "viberadio",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-11-10",
+  "routes": [{ "pattern": "slackdj.jonas-strassel.de", "custom_domain": true }],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/slack/*", "/ws"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "STATION_REGISTRY", "class_name": "StationRegistry" },
+      { "name": "STATION", "class_name": "Station" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StationRegistry", "Station"] }]
+}
