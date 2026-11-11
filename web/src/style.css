@@ -81,6 +81,13 @@
   --edge: #123a57; --rule: #0d2a40; --led-off: #1c3a52; --fill-start: #516210; --quiet-edge: #16283a;
   --x-fg: #ced7dd; --x-bg: #08131c; --x-border: #1c3a52; --viz-mid: #e0f87f; --viz-hi: #6c869a; --peak: #f5fdd4;
 }
+/* Gruvbox (dark, medium contrast): warm cream text on dark brown-grey, with the yellow as the accent. Every text pair measured >= 4.5:1. */
+[data-theme="gruvbox"] {
+  --bg: #1d2021; --lcd: #141617; --accent: #fabd2f; --accent-rgb: 250, 189, 47; --accent-dim: #d79921;
+  --text: #ebdbb2; --hi: #fbf1c7; --list: #d5c4a1; --muted: #a89984; --dim-text: #bdae93; --row: #32302f;
+  --edge: #504945; --rule: #3c3836; --led-off: #504945; --fill-start: #b57614; --quiet-edge: #3c3836;
+  --x-fg: #d5c4a1; --x-bg: #282828; --x-border: #504945; --viz-mid: #b8bb26; --viz-hi: #fb4934; --peak: #fbf1c7;
+}
 
 * { box-sizing: border-box; }
 

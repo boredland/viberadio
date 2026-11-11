@@ -733,6 +733,139 @@ const empaScene: Scene = (w, h) => {
   };
 };
 
+/** Gruvbox palette (dark, medium contrast). The autumn scene is fixed to these, like the brand scenes. */
+const GRUV_BG = "#1d2021";
+const GRUV_SKY_LO = "#3c2a1a";
+const GRUV_SUN = "250, 189, 47";
+const GRUV_LEAVES = ["204, 36, 29", "214, 93, 14", "215, 153, 33", "250, 189, 47", "152, 151, 26", "177, 98, 134"] as const;
+
+/** Falling leaves, seeded so the layout is the same on every load. Each follows one spectrum band. */
+const LEAVES = (() => {
+  const rnd = seeded(1971);
+  return Array.from({ length: 46 }, (_, i) => ({
+    x: rnd(),
+    y: rnd(),
+    size: 7 + rnd() * 10,
+    fall: 0.018 + rnd() * 0.03,
+    sway: rnd() * 6.28,
+    spin: (rnd() - 0.5) * 2,
+    colour: GRUV_LEAVES[Math.floor(rnd() * GRUV_LEAVES.length)],
+    band: i % 20,
+  }));
+})();
+
+/** Tree silhouettes: a trunk and three layers of leaf mass, planted along a ridge. Seeded like the leaves. */
+const TREES = (() => {
+  const rnd = seeded(33);
+  return Array.from({ length: 13 }, (_, i) => ({
+    x: (i + 0.5 + (rnd() - 0.5) * 0.7) / 13,
+    height: 0.12 + rnd() * 0.12,
+    layer: rnd() < 0.5 ? 0 : 1,
+    colour: GRUV_LEAVES[Math.floor(rnd() * 4)],
+    phase: rnd() * 6.28,
+  }));
+})();
+
+/**
+ * Autumn: a dusk sky with a low sun, rows of trees in Gruvbox reds, oranges and yellows, and leaves falling through the
+ * air.
+ *  - With REAL EQ on, every falling leaf follows one spectrum band: a louder band makes its leaf bigger, brighter and
+ *    quicker. The trees sway and flare on the bass and the sun swells with it, and a kick throws a gust of extra leaves.
+ *  - Without it the leaves drift slowly and the trees stand still, so the backdrop stays mute. Reduced motion paints one still frame.
+ */
+const autumnScene: Scene = (w, h) => {
+  const hy = h * 0.72;
+  let lastGust = -Infinity;
+  let prevBass = 0;
+  let gust = 0;
+  // Each leaf's height is advanced a frame at a time. Computing it as fall x time x speed made every change in a band's
+  // level rescale the whole elapsed time, so leaves jumped across the screen whenever the music got louder or quieter.
+  const heights = LEAVES.map((l) => l.y);
+  let lastT = -1;
+
+  const leaf = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number, angle: number, rgb: string, alpha: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.fillStyle = `rgba(${rgb}, ${alpha.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.quadraticCurveTo(size * 0.8, -size * 0.2, 0, size);
+    ctx.quadraticCurveTo(-size * 0.8, -size * 0.2, 0, -size);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  return (ctx, t, audio) => {
+    const bands = audio?.bands.length ? audio.bands : null;
+    const pulse = audio ? Math.min(1, audio.bass / 0.4) : 0;
+
+    ctx.fillStyle = GRUV_BG;
+    ctx.fillRect(0, 0, w, h);
+    const sky = ctx.createLinearGradient(0, 0, 0, hy);
+    sky.addColorStop(0, GRUV_BG);
+    sky.addColorStop(0.7, "#2d2318");
+    sky.addColorStop(1, GRUV_SKY_LO);
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, hy);
+
+    const sx = w * 0.72;
+    const sr = Math.min(w, h) * (0.1 + 0.012 * pulse);
+    const glow = ctx.createRadialGradient(sx, hy - sr * 0.2, sr * 0.3, sx, hy - sr * 0.2, sr * 3.4);
+    glow.addColorStop(0, `rgba(${GRUV_SUN}, ${(0.42 + 0.2 * pulse).toFixed(3)})`);
+    glow.addColorStop(1, `rgba(${GRUV_SUN}, 0)`);
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, hy);
+    ctx.fillStyle = `rgba(${GRUV_SUN}, 0.9)`;
+    ctx.beginPath();
+    ctx.arc(sx, hy - sr * 0.2, sr, Math.PI, 0);
+    ctx.fill();
+
+    // Ground, then the trees on it. Back row first, so the front row overlaps it.
+    ctx.fillStyle = "#17120d";
+    ctx.fillRect(0, hy, w, h - hy);
+    for (const layer of [0, 1]) {
+      for (const tr of TREES) {
+        if (tr.layer !== layer) continue;
+        const base = hy + (layer === 0 ? 0 : h * 0.05);
+        const th = h * tr.height * (layer === 0 ? 1 : 1.35);
+        const x = tr.x * w + (bands ? Math.sin(t / 700 + tr.phase) * 3 * pulse : 0);
+        const alpha = layer === 0 ? 0.55 : 0.85;
+        ctx.fillStyle = `rgba(60, 40, 22, ${alpha})`;
+        ctx.fillRect(x - th * 0.04, base - th * 0.5, th * 0.08, th * 0.5);
+        for (let k = 0; k < 3; k++) {
+          const r = th * (0.34 - k * 0.07) * (1 + 0.1 * pulse);
+          ctx.fillStyle = `rgba(${tr.colour}, ${(alpha * (0.55 + 0.2 * k + 0.15 * pulse)).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(x + (k - 1) * th * 0.12, base - th * (0.62 + 0.16 * k), r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // A kick throws a gust: the leaves are pushed sideways for a moment, then settle.
+    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastGust > 260) {
+      gust = 1;
+      lastGust = t;
+    }
+    prevBass = audio?.bass ?? 0;
+    gust *= 0.94;
+
+    const dt = lastT < 0 ? 0 : Math.min(100, Math.max(0, t - lastT));
+    lastT = t;
+    for (let i = 0; i < LEAVES.length; i++) {
+      const l = LEAVES[i];
+      const level = bands ? bands[l.band] : 0;
+      heights[i] = (((heights[i] + (l.fall * dt) / 1000 * (1 + 2.5 * level)) % 1) + 1) % 1;
+      const py = heights[i] * h;
+      const px = l.x * w + Math.sin(t / 1400 + l.sway) * 22 + gust * 60 * (1 + l.spin);
+      const size = l.size * (1 + 0.8 * level);
+      const alpha = bands ? 0.35 + 0.6 * level : 0.55 + 0.2 * Math.sin(t / 1900 + l.sway);
+      leaf(ctx, px, py, size, t / 900 * l.spin + l.sway, l.colour, Math.min(0.95, alpha));
+    }
+  };
+};
+
 const SCENES: Record<BackgroundId, Scene> = {
   sunset: sunsetScene,
   sunrise: sunriseScene,
@@ -740,6 +873,7 @@ const SCENES: Record<BackgroundId, Scene> = {
   night: nightScene,
   kivo: kivoScene,
   empa: empaScene,
+  autumn: autumnScene,
   plain: plainScene,
 };
 
