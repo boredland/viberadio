@@ -1041,12 +1041,19 @@ const snowScene: Scene = (w, h) => {
     lake.addColorStop(1, "#0a1626");
     ctx.fillStyle = lake;
     ctx.fillRect(0, hy + h * 0.045, w, h - hy - h * 0.045);
-    // The moon's reflection on the ice.
-    const refl = ctx.createLinearGradient(0, hy + h * 0.05, 0, h);
-    refl.addColorStop(0, `rgba(${SNOW_ICE}, ${(0.22 + 0.15 * pulse).toFixed(3)})`);
+    // The moon's reflection on the ice: a soft elongated glow, not a rectangle, so it has no hard edges to read as a
+    // square. It uses the eased pulse, so a kick brightens it gradually instead of stepping it.
+    const ry = hy + h * 0.05;
+    ctx.save();
+    ctx.translate(mx, ry);
+    ctx.scale(1, (h - ry) / (mr * 2.6));
+    const refl = ctx.createRadialGradient(0, 0, 0, 0, 0, mr * 2.6);
+    refl.addColorStop(0, `rgba(${SNOW_ICE}, ${(0.2 + 0.12 * auroraPulse).toFixed(3)})`);
+    refl.addColorStop(0.45, `rgba(${SNOW_ICE}, ${(0.08 + 0.05 * auroraPulse).toFixed(3)})`);
     refl.addColorStop(1, `rgba(${SNOW_ICE}, 0)`);
     ctx.fillStyle = refl;
-    ctx.fillRect(mx - mr * 0.9, hy + h * 0.05, mr * 1.8, h - hy);
+    ctx.fillRect(-mr * 2.6, 0, mr * 5.2, mr * 2.6);
+    ctx.restore();
 
     // A kick throws a gust that sweeps the snow sideways, then settles.
     if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastGust > 260) {
