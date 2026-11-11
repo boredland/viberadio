@@ -5,7 +5,11 @@
     "background_color": "#7c3aed"
   },
   "features": {
-    "bot_user": { "display_name": "viberadio", "always_online": true },
+    "app_home": {},
+    "bot_user": {
+      "display_name": "viberadio",
+      "always_online": true
+    },
     "slash_commands": [
       {
         "command": "/viberadio",
@@ -17,18 +21,31 @@
   },
   "oauth_config": {
     "redirect_urls": [
-      "https://venture-receiver-asbestos-commercial.trycloudflare.com/slack/oauth/callback",
       "https://slackdj.jonas-strassel.de/slack/oauth/callback"
     ],
-    "scopes": { "bot": ["channels:history", "channels:read", "chat:write", "commands", "reactions:write", "users:read"] }
+    "scopes": {
+      "bot": [
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "reactions:write",
+        "users:read"
+      ]
+    }
   },
   "settings": {
+    "socket_mode_enabled": false,
+    "org_deploy_enabled": false,
     "event_subscriptions": {
       "request_url": "https://slackdj.jonas-strassel.de/slack/events",
-      "bot_events": ["message.channels", "member_joined_channel", "app_uninstalled", "tokens_revoked"]
+      "bot_events": [
+        "message.channels",
+        "member_joined_channel",
+        "app_uninstalled",
+        "tokens_revoked"
+      ]
     },
-    "org_deploy_enabled": false,
-    "socket_mode_enabled": false,
     "token_rotation_enabled": false
   }
 }
