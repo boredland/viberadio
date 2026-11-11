@@ -10,6 +10,7 @@ import { Rotation } from "./Rotation";
 import { bpmFor, setBeatSource } from "./Backdrop";
 import { startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
 import { Look } from "./Look";
+import { loadVolume, saveVolume } from "./volume";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -37,7 +38,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const [connected, setConnected] = useState(true);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [apiRetry, setApiRetry] = useState(0);
-  const [volume, setVolume] = useState(80);
+  // A lazy initialiser, so storage is read once at mount, and the player is created with it in onReady via volumeRef.
+  const [volume, setVolume] = useState(loadVolume);
   const [muted, setMuted] = useState(false);
   const [unmuteChip, setUnmuteChip] = useState(false);
   const [configError, setConfigError] = useState(false);
@@ -205,6 +207,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const setVol = (v: number) => {
     setVolume(v);
     playerRef.current?.setVolume(v);
+    // Every change, not on release: arrow keys on the slider have no release event, and the write is one small number.
+    saveVolume(v);
   };
 
   const toggleMute = () => {
