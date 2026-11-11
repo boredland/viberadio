@@ -99,8 +99,7 @@ export async function startTabAudio(): Promise<void> {
     void acquiredCtx?.close().catch(() => {});
   };
   try {
-    // Video is required by Chrome even when only the audio is wanted; the video track is dropped right after.
-    // suppressLocalAudioPlayback stays false: true would mute the tab for the listener who is capturing it.
+    // Video is required by Chrome even when only the audio is wanted; the video track is disabled right after.
     const s = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -108,7 +107,6 @@ export async function startTabAudio(): Promise<void> {
       preferCurrentTab: true,
       systemAudio: "exclude",
       surfaceSwitching: "exclude",
-      suppressLocalAudioPlayback: false,
     } as DisplayMediaStreamOptions);
     acquired = s;
     if (abandoned()) return release();
@@ -147,6 +145,13 @@ export async function startTabAudio(): Promise<void> {
     a.smoothingTimeConstant = 0.6;
     // Analyser only: deliberately not connected to ctx.destination, so the captured copy never plays a second time.
     src.connect(a);
+
+    // "Stop sharing" during the resume wait ends the track before `stream` is published, so the listener above saw nothing.
+    // Publishing it would show REAL EQ as on over silent bars, so refuse a track that is already dead.
+    if (track.readyState === "ended") {
+      release();
+      return set({ status: "off" });
+    }
 
     // Published only now that the whole chain is live, so a failure above never leaves half of it behind.
     stream = s;
