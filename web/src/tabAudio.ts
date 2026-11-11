@@ -113,6 +113,10 @@ export async function startTabAudio(): Promise<void> {
     // 2048 gives ~23 Hz bins at 48 kHz. At 512 (~94 Hz) the log-spaced low bars each span less than one bin, so a single bass
     // note lit ten bars at once.
     analyser.fftSize = 2048;
+    // The default window tops out at -30 dBFS, so anything louder pins a bar at full scale and loud music reads as a flat wall.
+    // -90..-10 keeps headroom: a moderately loud tone lands mid-scale and only genuinely hot peaks reach the top.
+    analyser.minDecibels = -90;
+    analyser.maxDecibels = -10;
     analyser.smoothingTimeConstant = 0.6;
     bins = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
     // Analyser only: deliberately not connected to ctx.destination, so the captured copy never plays a second time.
@@ -126,14 +130,14 @@ export async function startTabAudio(): Promise<void> {
 }
 
 /**
- * 0..1 level for each of the 20 bars, or null when capture is not running. Bars are log-spaced across 40 Hz to 14 kHz, since
+ * 0..1 level for each of the 20 bars, or null when capture is not running. Bars are log-spaced across 60 Hz to 14 kHz, since
  * music energy sits at the low end and linear buckets would leave most bars idle.
  */
 export function readLevels(): Float32Array | null {
   if (state.status !== "on" || !analyser || !bins || !ctx) return null;
   analyser.getByteFrequencyData(bins);
   const hzPerBin = ctx.sampleRate / analyser.fftSize;
-  const lo = 40;
+  const lo = 60;
   const hi = Math.min(14000, ctx.sampleRate / 2);
   for (let i = 0; i < BARS; i++) {
     const f0 = lo * Math.pow(hi / lo, i / BARS);

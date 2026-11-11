@@ -267,8 +267,10 @@ const sunriseScene: Scene = (w, h) => (ctx, t, beat) => {
 
   // Clouds drift slowly and catch the light underneath.
   for (const c of CLOUDS) {
-    const x = (((c.x * w + (t / 1000) * 6 * c.speed) % (w * 1.4)) - w * 0.2);
     const cw = c.w * w;
+    // Wrapped over the canvas width plus the cloud's own width: it travels fully off the right edge before reappearing fully
+    // off the left, so it never pops in or out while visible.
+    const x = ((c.x * w + (t / 1000) * 6 * c.speed) % (w + cw)) - cw;
     const cy = c.y * hy;
     const warm = Math.min(1, c.y * 1.6 + 0.2);
     const cg = ctx.createLinearGradient(0, cy - 8, 0, cy + 10);
