@@ -10,6 +10,7 @@ export const THEMES = [
   { id: "kivo", label: "KIVO", swatch: "#8598d8" },
   { id: "empa", label: "EMPA", swatch: "#cbf429" },
   { id: "gruvbox", label: "GRUVBOX", swatch: "#fabd2f" },
+  { id: "snow", label: "SNOW", swatch: "#9fd8ff" },
 ] as const;
 
 export const BACKGROUNDS = [
@@ -20,6 +21,7 @@ export const BACKGROUNDS = [
   { id: "kivo", label: "KIVO" },
   { id: "empa", label: "EMPA" },
   { id: "autumn", label: "AUTUMN" },
+  { id: "snow", label: "SNOW" },
   { id: "plain", label: "PLAIN" },
 ] as const;
 

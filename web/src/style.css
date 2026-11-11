@@ -88,6 +88,13 @@
   --edge: #504945; --rule: #3c3836; --led-off: #504945; --fill-start: #b57614; --quiet-edge: #3c3836;
   --x-fg: #d5c4a1; --x-bg: #282828; --x-border: #504945; --viz-mid: #b8bb26; --viz-hi: #fb4934; --peak: #fbf1c7;
 }
+/* Snow: icy blue on a deep winter-night navy, with cold white text. Every text pair measured >= 4.5:1. */
+[data-theme="snow"] {
+  --bg: #0b1424; --lcd: #060d19; --accent: #9fd8ff; --accent-rgb: 159, 216, 255; --accent-dim: #6fb4e6;
+  --text: #e6f1fb; --hi: #ffffff; --list: #b8d4ea; --muted: #8fb0cc; --dim-text: #9ab4cb; --row: #16273d;
+  --edge: #25415f; --rule: #1b3350; --led-off: #25415f; --fill-start: #3b7fb5; --quiet-edge: #1b2c44;
+  --x-fg: #c3dbee; --x-bg: #0f1c2e; --x-border: #25415f; --viz-mid: #7ee8d0; --viz-hi: #c4b5fd; --peak: #ffffff;
+}
 
 * { box-sizing: border-box; }
 

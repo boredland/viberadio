@@ -866,6 +866,209 @@ const autumnScene: Scene = (w, h) => {
   };
 };
 
+/** Winter palette. The scene is fixed to it, like the other themed scenes. */
+const SNOW_BG = "#0b1424";
+const SNOW_SKY_HI = "#070d1a";
+const SNOW_SKY_LO = "#17304f";
+const SNOW_ICE = "159, 216, 255";
+const SNOW_AURORA = ["110, 231, 183", "125, 211, 252", "167, 139, 250"] as const;
+
+/** Snowflakes in three depths (small and slow far away, big and quick near). Seeded; each follows one spectrum band. */
+const FLAKES = (() => {
+  const rnd = seeded(1225);
+  return Array.from({ length: 90 }, (_, i) => {
+    const depth = rnd();
+    return {
+      x: rnd(),
+      y: rnd(),
+      size: 1 + depth * 3.4,
+      fall: 0.02 + depth * 0.05,
+      sway: rnd() * 6.28,
+      swayAmp: 6 + depth * 18,
+      band: i % 20,
+      depth,
+    };
+  });
+})();
+
+/** Pine trees on two ridges: a stack of three snow-covered triangles. Seeded like the flakes. */
+const PINES = (() => {
+  const rnd = seeded(77);
+  return Array.from({ length: 16 }, (_, i) => ({
+    x: (i + 0.5 + (rnd() - 0.5) * 0.8) / 16,
+    height: 0.1 + rnd() * 0.12,
+    layer: rnd() < 0.55 ? 0 : 1,
+    phase: rnd() * 6.28,
+  }));
+})();
+
+/** Stars in the upper sky; a few twinkle. Seeded. */
+const SNOW_STARS = (() => {
+  const rnd = seeded(404);
+  return Array.from({ length: 60 }, () => ({ x: rnd(), y: rnd() * 0.5, size: 0.8 + rnd() * 1.4, phase: rnd() * 6.28 }));
+})();
+
+/**
+ * Snow: a clear winter night. Stars and a moon, a soft aurora, snowy pines on two ridges and a frozen lake, with snow
+ * falling through all of it.
+ *  - With REAL EQ on, every snowflake follows one spectrum band: a louder band makes its flake bigger, brighter and quicker.
+ *    The aurora ribbons swell and ripple with the bass, the pines shiver, and a kick throws a gust that sweeps the snow
+ *    sideways.
+ *  - Without it the snow drifts gently and the aurora barely moves, so the backdrop stays mute. Reduced motion paints one
+ *    still frame.
+ */
+const snowScene: Scene = (w, h) => {
+  const hy = h * 0.7;
+  let lastGust = -Infinity;
+  let prevBass = 0;
+  let gust = 0;
+  // Heights are advanced a frame at a time, so a change in a band's loudness changes the speed instead of teleporting the
+  // flake (computing height as fall x time x speed rescaled all elapsed time on every level change).
+  const heights = FLAKES.map((f) => f.y);
+  let lastT = -1;
+  let auroraPhase = 0;
+  let lastAuroraT = -1;
+
+  const pine = (ctx: CanvasRenderingContext2D, x: number, base: number, th: number, alpha: number, shiver: number) => {
+    ctx.fillStyle = `rgba(8, 18, 32, ${alpha})`;
+    ctx.fillRect(x - th * 0.035, base - th * 0.14, th * 0.07, th * 0.14);
+    for (let k = 0; k < 3; k++) {
+      const half = th * (0.3 - k * 0.07);
+      const top = base - th * (0.26 + k * 0.27);
+      const bottom = base - th * (0.12 + k * 0.2);
+      const sx = x + shiver * (k + 1) * 0.4;
+      ctx.fillStyle = `rgba(14, 34, 52, ${alpha})`;
+      ctx.beginPath();
+      ctx.moveTo(sx, top - th * 0.2);
+      ctx.lineTo(x + half, bottom);
+      ctx.lineTo(x - half, bottom);
+      ctx.closePath();
+      ctx.fill();
+      // Snow lies on the upper side of each tier.
+      ctx.fillStyle = `rgba(226, 240, 252, ${alpha * 0.85})`;
+      ctx.beginPath();
+      ctx.moveTo(sx, top - th * 0.2);
+      ctx.lineTo(x + half * 0.62, bottom - (bottom - top + th * 0.2) * 0.38);
+      ctx.lineTo(x - half * 0.62, bottom - (bottom - top + th * 0.2) * 0.38);
+      ctx.closePath();
+      ctx.fill();
+    }
+  };
+
+  return (ctx, t, audio) => {
+    const bands = audio?.bands.length ? audio.bands : null;
+    const pulse = audio ? Math.min(1, audio.bass / 0.4) : 0;
+
+    const sky = ctx.createLinearGradient(0, 0, 0, hy);
+    sky.addColorStop(0, SNOW_SKY_HI);
+    sky.addColorStop(0.65, SNOW_BG);
+    sky.addColorStop(1, SNOW_SKY_LO);
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    for (const s of SNOW_STARS) {
+      const a = 0.35 + 0.35 * Math.sin(t / 900 + s.phase);
+      ctx.fillStyle = `rgba(230, 241, 251, ${a.toFixed(3)})`;
+      ctx.fillRect(s.x * w, s.y * hy, s.size, s.size);
+    }
+
+    // Aurora: three translucent ribbons across the upper sky. They swell with the bass and ripple faster with the mids.
+    // The ripple phase is advanced a frame at a time: writing it as (t / 2600) * speed multiplied ALL elapsed time by the
+    // current speed, so every change in the mids made the ribbons jump instead of just speeding up.
+    const mids = bands ? (bands[5] + bands[8] + bands[11]) / 3 : 0;
+    const adt = lastAuroraT < 0 ? 0 : Math.min(100, Math.max(0, t - lastAuroraT));
+    lastAuroraT = t;
+    auroraPhase += (adt / 2600) * (1 + 2.2 * mids);
+    for (let k = 0; k < 3; k++) {
+      const baseY = hy * (0.2 + k * 0.11);
+      const amp = h * (0.035 + 0.02 * pulse + 0.015 * mids);
+      ctx.beginPath();
+      ctx.moveTo(0, baseY);
+      for (let x = 0; x <= w; x += 12) {
+        ctx.lineTo(x, baseY + Math.sin(x / (170 + k * 60) + auroraPhase + k * 2) * amp + Math.sin(x / 70 + t / 1700 + k) * amp * 0.35);
+      }
+      ctx.lineTo(w, baseY + h * 0.2);
+      ctx.lineTo(0, baseY + h * 0.2);
+      ctx.closePath();
+      const g = ctx.createLinearGradient(0, baseY - amp, 0, baseY + h * 0.2);
+      const a = 0.14 + 0.16 * pulse + 0.05 * k;
+      g.addColorStop(0, `rgba(${SNOW_AURORA[k]}, 0)`);
+      g.addColorStop(0.3, `rgba(${SNOW_AURORA[k]}, ${a.toFixed(3)})`);
+      g.addColorStop(1, `rgba(${SNOW_AURORA[k]}, 0)`);
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+
+    // Moon with a halo.
+    // Placed low and left of centre: the panels cover the top of the page, so a moon up there is hidden behind them.
+    const mx = w * 0.12;
+    const my = hy * 0.62;
+    const mr = Math.min(w, h) * 0.045;
+    const halo = ctx.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
+    halo.addColorStop(0, `rgba(${SNOW_ICE}, ${(0.28 + 0.12 * pulse).toFixed(3)})`);
+    halo.addColorStop(1, `rgba(${SNOW_ICE}, 0)`);
+    ctx.fillStyle = halo;
+    ctx.fillRect(mx - mr * 5, my - mr * 5, mr * 10, mr * 10);
+    ctx.fillStyle = "#eaf4fd";
+    ctx.beginPath();
+    ctx.arc(mx, my, mr, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Far ridge of snow, then pines, then the frozen lake.
+    ctx.fillStyle = "#1b2f48";
+    ctx.beginPath();
+    ctx.moveTo(0, hy);
+    for (let x = 0; x <= w; x += 20) ctx.lineTo(x, hy - h * 0.03 - Math.sin(x / 190) * h * 0.02 - Math.sin(x / 70 + 1) * h * 0.008);
+    ctx.lineTo(w, hy + 2);
+    ctx.lineTo(0, hy + 2);
+    ctx.closePath();
+    ctx.fill();
+    for (const layer of [0, 1]) {
+      for (const p of PINES) {
+        if (p.layer !== layer) continue;
+        const base = hy + (layer === 0 ? 2 : h * 0.045);
+        const th = h * p.height * (layer === 0 ? 1 : 1.4);
+        const shiver = bands ? Math.sin(t / 150 + p.phase) * 2.2 * pulse : 0;
+        pine(ctx, p.x * w, base, th, layer === 0 ? 0.7 : 0.97, shiver);
+      }
+    }
+    const lake = ctx.createLinearGradient(0, hy, 0, h);
+    lake.addColorStop(0, "#1d3a5a");
+    lake.addColorStop(1, "#0a1626");
+    ctx.fillStyle = lake;
+    ctx.fillRect(0, hy + h * 0.045, w, h - hy - h * 0.045);
+    // The moon's reflection on the ice.
+    const refl = ctx.createLinearGradient(0, hy + h * 0.05, 0, h);
+    refl.addColorStop(0, `rgba(${SNOW_ICE}, ${(0.22 + 0.15 * pulse).toFixed(3)})`);
+    refl.addColorStop(1, `rgba(${SNOW_ICE}, 0)`);
+    ctx.fillStyle = refl;
+    ctx.fillRect(mx - mr * 0.9, hy + h * 0.05, mr * 1.8, h - hy);
+
+    // A kick throws a gust that sweeps the snow sideways, then settles.
+    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastGust > 260) {
+      gust = 1;
+      lastGust = t;
+    }
+    prevBass = audio?.bass ?? 0;
+    gust *= 0.94;
+
+    const dt = lastT < 0 ? 0 : Math.min(100, Math.max(0, t - lastT));
+    lastT = t;
+    for (let i = 0; i < FLAKES.length; i++) {
+      const f = FLAKES[i];
+      const level = bands ? bands[f.band] : 0;
+      heights[i] = (((heights[i] + (f.fall * dt) / 1000 * (1 + 2.2 * level)) % 1) + 1) % 1;
+      const px = f.x * w + Math.sin(t / 1500 + f.sway) * f.swayAmp + gust * 70 * (0.4 + f.depth);
+      const size = f.size * (1 + 0.7 * level);
+      const alpha = bands ? 0.3 + 0.65 * level : 0.5 + 0.25 * Math.sin(t / 2100 + f.sway);
+      ctx.fillStyle = `rgba(240, 248, 255, ${Math.min(0.95, alpha).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(px, heights[i] * h, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+};
+
 const SCENES: Record<BackgroundId, Scene> = {
   sunset: sunsetScene,
   sunrise: sunriseScene,
@@ -874,6 +1077,7 @@ const SCENES: Record<BackgroundId, Scene> = {
   kivo: kivoScene,
   empa: empaScene,
   autumn: autumnScene,
+  snow: snowScene,
   plain: plainScene,
 };
 
