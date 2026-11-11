@@ -63,9 +63,23 @@ function teardown(): void {
   ctx = null;
 }
 
+/** Bumped by every stop and every start. A start that resolves after a stop sees a different number and cleans up after itself. */
+let generation = 0;
+
 export function stopTabAudio(): void {
+  generation++;
   teardown();
   set({ status: "off" });
+}
+
+/** A context created after an await can come up "suspended" and a suspended resume() may stay pending; never wait forever. */
+const RESUME_TIMEOUT_MS = 3000;
+
+function resumeWithin(c: AudioContext, ms: number): Promise<void> {
+  return Promise.race([
+    c.resume(),
+    new Promise<void>((_, reject) => setTimeout(() => reject(new Error("audio context resume timed out")), ms)),
+  ]);
 }
 
 /**
@@ -74,7 +88,16 @@ export function stopTabAudio(): void {
 export async function startTabAudio(): Promise<void> {
   if (state.status === "starting" || state.status === "on") return;
   if (!tabAudioSupported()) return set({ status: "failed", reason: "unsupported" });
+  const gen = ++generation;
   set({ status: "starting" });
+  // Everything this call acquired, so an abandoned start (the listener left while the picker was open) releases it all.
+  let acquired: MediaStream | null = null;
+  let acquiredCtx: AudioContext | null = null;
+  const abandoned = () => gen !== generation;
+  const release = () => {
+    acquired?.getTracks().forEach((t) => t.stop());
+    void acquiredCtx?.close().catch(() => {});
+  };
   try {
     // Video is required by Chrome even when only the audio is wanted; the video track is dropped right after.
     // suppressLocalAudioPlayback stays false: true would mute the tab for the listener who is capturing it.
@@ -87,42 +110,53 @@ export async function startTabAudio(): Promise<void> {
       surfaceSwitching: "exclude",
       suppressLocalAudioPlayback: false,
     } as DisplayMediaStreamOptions);
+    acquired = s;
+    if (abandoned()) return release();
 
     // The video was only the price of admission. Disabled, not stopped: in some setups stopping the video track ends the
     // whole share. teardown() stops every track when capture ends, so nothing is left running.
     s.getVideoTracks().forEach((t) => (t.enabled = false));
     const track = s.getAudioTracks()[0];
     if (!track) {
-      s.getTracks().forEach((t) => t.stop());
+      release();
       return set({ status: "failed", reason: "no-audio" });
     }
 
-    stream = s;
     // "Stop sharing" in the browser bar ends the track: fall back to the synthetic bars instead of showing silence.
     track.addEventListener("ended", () => {
-      if (stream) stopTabAudio();
+      if (stream === s) stopTabAudio();
     });
 
-    ctx = new AudioContext();
+    const c = new AudioContext();
+    acquiredCtx = c;
     // Created after an await, so the click's user activation may be spent and the context can start "suspended". A suspended
     // analyser reads all zeros while the toggle claims success, which is the worst failure to show: resume, then verify.
-    await ctx.resume();
-    if (ctx.state !== "running") throw new Error("audio context did not start");
-    const src = ctx.createMediaStreamSource(stream);
-    analyser = ctx.createAnalyser();
+    await resumeWithin(c, RESUME_TIMEOUT_MS);
+    if (abandoned()) return release();
+    if (c.state !== "running") throw new Error("audio context did not start");
+
+    const src = c.createMediaStreamSource(s);
+    const a = c.createAnalyser();
     // 2048 gives ~23 Hz bins at 48 kHz. At 512 (~94 Hz) the log-spaced low bars each span less than one bin, so a single bass
     // note lit ten bars at once.
-    analyser.fftSize = 2048;
+    a.fftSize = 2048;
     // The default window tops out at -30 dBFS, so anything louder pins a bar at full scale and loud music reads as a flat wall.
     // -90..-10 keeps headroom: a moderately loud tone lands mid-scale and only genuinely hot peaks reach the top.
-    analyser.minDecibels = -90;
-    analyser.maxDecibels = -10;
-    analyser.smoothingTimeConstant = 0.6;
-    bins = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+    a.minDecibels = -90;
+    a.maxDecibels = -10;
+    a.smoothingTimeConstant = 0.6;
     // Analyser only: deliberately not connected to ctx.destination, so the captured copy never plays a second time.
-    src.connect(analyser);
+    src.connect(a);
+
+    // Published only now that the whole chain is live, so a failure above never leaves half of it behind.
+    stream = s;
+    ctx = c;
+    analyser = a;
+    bins = new Uint8Array(new ArrayBuffer(a.frequencyBinCount));
     set({ status: "on" });
   } catch (err) {
+    release();
+    if (abandoned()) return;
     teardown();
     const name = (err as DOMException)?.name;
     set({ status: "failed", reason: name === "NotAllowedError" || name === "AbortError" ? "denied" : "error" });
