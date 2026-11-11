@@ -120,7 +120,7 @@ function rememberAuto(on: boolean): void {
  */
 export async function autoStartTabAudio(): Promise<void> {
   if (!tabAudioSupported() || !autoAllowed()) return;
-  await startTabAudio();
+  await startTabAudio({ automatic: true });
 }
 
 /** A context created after an await can come up "suspended" and a suspended resume() may stay pending; never wait forever. */
@@ -136,7 +136,7 @@ function resumeWithin(c: AudioContext, ms: number): Promise<void> {
 /**
  * Must run inside a click handler: getDisplayMedia needs a user gesture, and an `await` before it can lose that gesture.
  */
-export async function startTabAudio(): Promise<void> {
+export async function startTabAudio(opts: { automatic?: boolean } = {}): Promise<void> {
   if (state.status === "starting" || state.status === "on") return;
   if (!tabAudioSupported()) return set({ status: "failed", reason: "unsupported" });
   const gen = ++generation;
@@ -220,7 +220,9 @@ export async function startTabAudio(): Promise<void> {
     const reason = name === "NotAllowedError" || name === "AbortError" ? "denied" : "error";
     // Declining the browser's prompt is an answer: do not ask again on every visit.
     if (reason === "denied") rememberAuto(false);
-    set({ status: "failed", reason });
+    // Cancelling a prompt the listener never asked for is their answer, not an error to report. Only a manual click that
+    // is cancelled shows the "Sharing was cancelled" note.
+    set(reason === "denied" && opts.automatic ? { status: "off" } : { status: "failed", reason });
   }
 }
 
