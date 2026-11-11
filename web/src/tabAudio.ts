@@ -5,8 +5,8 @@ import { useSyncExternalStore } from "react";
  * shares THIS tab with its audio, and an AnalyserNode reads the shared track. Nothing is recorded, stored or sent anywhere,
  * and the capture is never routed back to the speakers (that would double the sound), so playback is unaffected.
  *
- * Chromium on desktop only (Firefox and Safari give no tab audio, phones have no getDisplayMedia). The picker is browser UI
- * and the user can stop at any time from the browser's own "Stop sharing" bar.
+ * Chromium on desktop only (Firefox gives no audio track for getDisplayMedia and hides the toggle; Safari is unsupported;
+ * phones have no tab audio). The picker is browser UI and the user can stop at any time from the browser's own "Stop sharing" bar.
  */
 
 export type TabAudioState =
@@ -31,7 +31,21 @@ let bins: Uint8Array<ArrayBuffer> | null = null;
 const levels = new Float32Array(BARS);
 
 export function tabAudioSupported(): boolean {
-  return typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function" && !isTouchOnly();
+  return (
+    typeof navigator !== "undefined" &&
+    typeof navigator.mediaDevices?.getDisplayMedia === "function" &&
+    !isTouchOnly() &&
+    !isGecko()
+  );
+}
+
+/**
+ * Firefox exposes getDisplayMedia but never returns an audio track for it (Mozilla bug 1541425, open since 2019), so offering
+ * the toggle there can only end in an error note. Detected by a Gecko-only property rather than the user-agent string, which
+ * other browsers can imitate. If Firefox ships tab audio, drop this check.
+ */
+function isGecko(): boolean {
+  return "mozInnerScreenX" in window;
 }
 
 /** Phones and tablets expose no tab audio even where getDisplayMedia exists; do not offer a toggle that cannot work. */
