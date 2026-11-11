@@ -82,10 +82,45 @@ function teardown(): void {
 /** Bumped by every stop and every start. A start that resolves after a stop sees a different number and cleans up after itself. */
 let generation = 0;
 
+/** Teardown without a verdict: leaving the page, or a start being replaced. The listener has not said no. */
 export function stopTabAudio(): void {
   generation++;
   teardown();
   set({ status: "off" });
+}
+
+/** The listener turned real EQ off (button or the browser's own "Stop sharing"): stop, and do not ask again automatically. */
+export function turnOffTabAudio(): void {
+  rememberAuto(false);
+  stopTabAudio();
+}
+
+const AUTO_KEY = "viberadio:real-eq-auto";
+
+function autoAllowed(): boolean {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function rememberAuto(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_KEY, on ? "1" : "0");
+  } catch {
+    // storage unavailable: asking again next visit is the harmless outcome
+  }
+}
+
+/**
+ * Asks to share the tab when the listener tunes in. getDisplayMedia needs a click, and Tune In is one, so this must be called
+ * synchronously from that handler. Does nothing where tab audio is impossible, or after the listener declined or turned it
+ * off; the REAL EQ button still works then. The browser cannot remember a share across reloads, so it asks on each visit.
+ */
+export async function autoStartTabAudio(): Promise<void> {
+  if (!tabAudioSupported() || !autoAllowed()) return;
+  await startTabAudio();
 }
 
 /** A context created after an await can come up "suspended" and a suspended resume() may stay pending; never wait forever. */
@@ -136,9 +171,9 @@ export async function startTabAudio(): Promise<void> {
       return set({ status: "failed", reason: "no-audio" });
     }
 
-    // "Stop sharing" in the browser bar ends the track: fall back to the synthetic bars instead of showing silence.
+    // "Stop sharing" in the browser bar is the listener turning it off: remember that, so the next visit does not ask again.
     track.addEventListener("ended", () => {
-      if (stream === s) stopTabAudio();
+      if (stream === s) turnOffTabAudio();
     });
 
     const c = new AudioContext();
@@ -174,13 +209,18 @@ export async function startTabAudio(): Promise<void> {
     ctx = c;
     analyser = a;
     bins = new Uint8Array(new ArrayBuffer(a.frequencyBinCount));
+    // A listener who shared once is happy to be asked again; this also re-enables asking after an earlier refusal.
+    rememberAuto(true);
     set({ status: "on" });
   } catch (err) {
     release();
     if (abandoned()) return;
     teardown();
     const name = (err as DOMException)?.name;
-    set({ status: "failed", reason: name === "NotAllowedError" || name === "AbortError" ? "denied" : "error" });
+    const reason = name === "NotAllowedError" || name === "AbortError" ? "denied" : "error";
+    // Declining the browser's prompt is an answer: do not ask again on every visit.
+    if (reason === "denied") rememberAuto(false);
+    set({ status: "failed", reason });
   }
 }
 

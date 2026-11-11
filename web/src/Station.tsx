@@ -8,7 +8,7 @@ import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
 import { bpmFor, setBeatSource } from "./Backdrop";
-import { startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
+import { autoStartTabAudio, startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, turnOffTabAudio, useTabAudio } from "./tabAudio";
 import { Look } from "./Look";
 import { loadVolume, saveVolume } from "./volume";
 import { BrowserNote } from "./BrowserNote";
@@ -203,6 +203,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
       },
     });
     playerRef.current = player;
+    // Last, so the player already exists when the browser's share prompt takes over. Still the same click, so it is allowed.
+    void autoStartTabAudio();
   }, [token]);
 
   const setVol = (v: number) => {
@@ -429,7 +431,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
             {tabAudioSupported() && (
               <button
                 className="btn quiet"
-                onClick={tabAudio.status === "on" ? stopTabAudio : () => void startTabAudio()}
+                onClick={tabAudio.status === "on" ? turnOffTabAudio : () => void startTabAudio()}
                 aria-pressed={tabAudio.status === "on"}
                 disabled={tabAudio.status === "starting"}
                 title="Make the equalizer follow the real sound. Your browser will ask you to share this tab with its audio. Nothing is recorded or sent. Desktop Chrome or Edge only."
