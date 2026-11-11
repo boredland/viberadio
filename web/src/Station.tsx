@@ -233,6 +233,20 @@ export function Station({ token, online }: { token: string; online: boolean }) {
 
   useEffect(() => () => setNowPlaying(null), []);
 
+  // The tab title carries the track and whether it is audible, so a pinned or background tab shows it. A volume of 0 is
+  // silent too, so it counts as muted.
+  const silent = muted || volume === 0;
+  const trackTitle = snap?.now?.title ?? null;
+  useEffect(() => {
+    if (!tuned || !trackTitle) {
+      document.title = "viberadio";
+      return;
+    }
+    document.title = `${silent ? "🔇" : "🔊"} ${trackTitle} · viberadio`;
+  }, [tuned, trackTitle, silent]);
+
+  useEffect(() => () => void (document.title = "viberadio"), []);
+
   // The backdrop pulses on the station clock, and only while the player is really playing (never while paused or blocked).
   useEffect(() => {
     if (!tuned) return;
