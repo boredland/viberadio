@@ -165,7 +165,7 @@ const matrixScene: Scene = (w, h) => {
     last = t;
     ctx.fillStyle = `rgba(${c.bgRgb}, 0.12)`;
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.45 + 0.45 * envelope(beat)})`;
+    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.7 + 0.3 * envelope(beat)})`;
     ctx.font = `${MATRIX_SIZE}px ui-monospace, Menlo, monospace`;
     const rows = Math.ceil(h / MATRIX_SIZE) + 1;
     if (!seeded) {
