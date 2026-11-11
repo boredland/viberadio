@@ -8,7 +8,8 @@ import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
 import { bpmFor, setBeatSource } from "./Backdrop";
-import { startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
+import { eqActive, setEqOutput, startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
+import { EqPanel } from "./EqPanel";
 import { Look } from "./Look";
 import { loadVolume, saveVolume } from "./volume";
 
@@ -55,8 +56,10 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const latestRef = useRef<StateMessage | null>(null);
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
+  const mutedRef = useRef(false);
   const keepAwake = useKeepAwake(tuned);
   const tabAudio = useTabAudio();
+  const eqMode = tabAudio.status === "on" && tabAudio.eq;
 
   useEffect(() => {
     let cancelled = false;
@@ -204,9 +207,14 @@ export function Station({ token, online }: { token: string; online: boolean }) {
     playerRef.current = player;
   }, [token]);
 
+  /** In EQ mode the YouTube player stays at full level and the station volume is applied to the filtered copy instead. */
+  const outputGain = (v: number, m: boolean): number => (m ? 0 : v / 100);
+
+  mutedRef.current = muted;
   const setVol = (v: number) => {
     setVolume(v);
-    playerRef.current?.setVolume(v);
+    if (eqActive()) setEqOutput(outputGain(v, muted));
+    else playerRef.current?.setVolume(v);
     // Every change, not on release: arrow keys on the slider have no release event, and the write is one small number.
     saveVolume(v);
   };
@@ -214,10 +222,39 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const toggleMute = () => {
     const p = playerRef.current;
     if (!p) return;
-    if (muted) p.unMute();
+    if (eqActive()) {
+      // The player must keep playing at full level or the capture goes silent, so mute acts on the filtered copy.
+      setEqOutput(outputGain(volume, !muted));
+    } else if (muted) p.unMute();
     else p.mute();
     setMuted(!muted);
     setUnmuteChip(false);
+  };
+
+  // Leaving EQ mode by any route (the button, the browser's "Stop sharing", leaving the page) must hand the level back to the
+  // YouTube player, which was held at 100 so the capture stayed full-scale. Without this the music would jump to full volume.
+  const wasEq = useRef(false);
+  useEffect(() => {
+    if (wasEq.current && !eqMode) {
+      const p = playerRef.current;
+      p?.setVolume(volumeRef.current);
+      if (mutedRef.current) p?.mute();
+    }
+    wasEq.current = eqMode;
+  }, [eqMode]);
+
+  /**
+   * Starts or stops EQ mode. Capture is started first and the player is raised to full level only once it is live, so a
+   * refused prompt never leaves the player at 100. The funnel back down is the effect above.
+   */
+  const toggleEq = async () => {
+    if (eqMode) return stopTabAudio();
+    if (tabAudio.status === "on") stopTabAudio();
+    await startTabAudio(true, outputGain(volume, muted));
+    if (!eqActive()) return;
+    const p = playerRef.current;
+    p?.unMute();
+    p?.setVolume(100);
   };
 
   /** A tap is the gesture the autoplay policy needs, so this resumes where the silent retries gave up. */
@@ -428,13 +465,25 @@ export function Station({ token, online }: { token: string; online: boolean }) {
               <button
                 className="btn quiet"
                 onClick={tabAudio.status === "on" ? stopTabAudio : () => void startTabAudio()}
-                aria-pressed={tabAudio.status === "on"}
+                aria-pressed={tabAudio.status === "on" && !tabAudio.eq}
                 disabled={tabAudio.status === "starting"}
                 title="Make the equalizer follow the real sound. Your browser will ask you to share this tab with its audio. Nothing is recorded or sent. Desktop Chrome or Edge only."
               >
-                {tabAudio.status === "on" ? "REAL EQ ✓" : tabAudio.status === "starting" ? "REAL EQ …" : "REAL EQ"}
+                {tabAudio.status === "on" && !tabAudio.eq ? "REAL EQ ✓" : tabAudio.status === "starting" ? "REAL EQ …" : "REAL EQ"}
               </button>
             )}
+            {tabAudioSupported() && (
+              <button
+                className="btn quiet"
+                onClick={() => void toggleEq()}
+                aria-pressed={eqMode}
+                disabled={tabAudio.status === "starting"}
+                title="Experimental. Plays the tab's sound through an equalizer you can adjust. Sharing this tab with audio is required. Whether this works without doubled or echoing sound depends on your browser, so try it with the volume low first. Desktop Chrome or Edge only."
+              >
+                {eqMode ? "EQUALIZER ✓" : "EQUALIZER (BETA)"}
+              </button>
+            )}
+            {eqMode && <EqPanel />}
             {tabAudio.status === "failed" && <p className="dim">{tabAudioMessage(tabAudio.reason)}</p>}
           </div>
         )}
