@@ -122,17 +122,40 @@ function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: num
     ctx.stroke();
   }
 
-  const spread = Math.max(w, 720) * 0.09;
+  const bands = audio?.bands.length ? audio.bands : null;
+  const spread = bands ? cx / (bands.length - 1) : Math.max(w, 720) * 0.09;
   const cols = ctx.createLinearGradient(0, hy, 0, h);
   cols.addColorStop(0, "rgba(255,80,210,0)");
   cols.addColorStop(1, `rgba(255,80,210,${Math.min(1, 0.7 * boost)})`);
-  ctx.strokeStyle = cols;
-  ctx.beginPath();
-  for (let i = -20; i <= 20; i++) {
-    ctx.moveTo(cx, hy);
-    ctx.lineTo(cx + i * spread, h);
+  if (!bands) {
+    ctx.strokeStyle = cols;
+    ctx.beginPath();
+    for (let i = -20; i <= 20; i++) {
+      ctx.moveTo(cx, hy);
+      ctx.lineTo(cx + i * spread, h);
+    }
+    ctx.stroke();
+  } else {
+    // With REAL EQ on the floor lines are a mirrored spectrum: the centre line is the bass, the lines toward the edges are
+    // the treble, one line per band on each side. Spacing is set so every line reaches the bottom edge inside the viewport
+    // (the usual wide spacing put the treble lines off-screen), and alpha is per band rather than the horizon gradient,
+    // which left the treble lines almost invisible.
+    ctx.strokeStyle = "rgba(255,80,210,1)";
+    for (let k = 0; k < bands.length; k++) {
+      const level = bands[k];
+      ctx.globalAlpha = 0.2 + 0.6 * level;
+      ctx.lineWidth = 1 + 2 * level;
+      ctx.beginPath();
+      ctx.moveTo(cx, hy);
+      ctx.lineTo(cx + k * spread, h);
+      if (k > 0) {
+        ctx.moveTo(cx, hy);
+        ctx.lineTo(cx - k * spread, h);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
-  ctx.stroke();
 
   ctx.strokeStyle = `rgba(255,170,230,${0.7 + 0.3 * pulse})`;
   ctx.lineWidth = 2;
@@ -311,23 +334,31 @@ const sunriseScene: Scene = (w, h) => (ctx, t, audio) => {
   ctx.fillStyle = sea;
   ctx.fillRect(0, hy, w, h - hy);
 
-  // Shimmer path: short horizontal glints under the sun that widen toward the viewer and flicker. With REAL EQ on, each row
-  // is one band of the spectrum (bass nearest the viewer, treble at the horizon) and its glint grows and brightens with that
-  // band's level, so the water reads as an equalizer. Without it the calm flicker stays.
-  const rows = 26;
+  // Shimmer path: short horizontal glints under the sun that widen toward the viewer and flicker. With REAL EQ on there is
+  // one row per spectrum band, evenly spaced in depth from just below the horizon to just above the bottom edge (bass nearest
+  // the viewer, treble at the horizon), and its glint grows and brightens with that band, so the water reads as an
+  // equalizer. Perspective spacing squeezed the treble rows under the horizon line, hence the even spacing. Without REAL EQ
+  // the calm perspective flicker stays; its 26th row sat below the canvas and is not drawn.
   const bands = audio?.bands.length ? audio.bands : null;
+  const rows = bands ? bands.length : 25;
   for (let i = 0; i < rows; i++) {
-    const z = (i + 1) / rows;
-    const y = hy + (h - hy) * z * z;
+    let z: number;
+    let y: number;
+    if (bands) {
+      const depth = 0.02 + 0.96 * (i / (rows - 1));
+      y = hy + (h - hy) * depth;
+      z = Math.sqrt(depth);
+    } else {
+      z = (i + 1) / 26;
+      y = hy + (h - hy) * z * z;
+    }
     const spread = r * (0.5 + 2.4 * z);
     const wob = Math.sin(t / 600 + i * 1.7) * spread * 0.18;
     let a: number;
     let lw: number;
     let thick: number;
     if (bands) {
-      // Row 0 (horizon) is the top band and the last row the bottom band, so all of them get a row. Taking the band from z
-      // instead stopped one short of the top band, and the highest band never lit.
-      const level = bands[Math.round((1 - i / (rows - 1)) * (bands.length - 1))];
+      const level = bands[rows - 1 - i];
       a = (0.1 + 0.7 * level) * (1 - 0.3 * z);
       lw = spread * (0.35 + 0.85 * level);
       thick = 1.5 + 2 * z + 1.5 * level;
