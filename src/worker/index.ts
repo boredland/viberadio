@@ -1,5 +1,7 @@
 import { MAX_PLAYLIST_VIDEOS, extractPlaylistIds, extractVideoIds } from "../../shared/video";
 import { WEB_ADDER, resolveSlackName } from "./names";
+import { botTokenFor, registry } from "./install";
+import { finishInstall, startInstall } from "./oauth";
 import { isUserMessage, slackChatPost, slackEscape, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
 import { fetchPlaylist, fetchVideoMeta, type Playlist } from "./youtube";
 import type { EnqueueItem } from "./station";
@@ -11,9 +13,15 @@ export interface Env {
   STATION_REGISTRY: DurableObjectNamespace<import("./registry").StationRegistry>;
   STATION: DurableObjectNamespace<import("./station").Station>;
   ASSETS: Fetcher;
-  SLACK_BOT_TOKEN: string;
-  SLACK_SIGNING_SECRET: string;
+  /** Token of the one workspace named by SLACK_TEAM_ID (installed before OAuth existed); every other workspace uses its own install. */
+  SLACK_BOT_TOKEN?: string;
   SLACK_TEAM_ID?: string;
+  SLACK_SIGNING_SECRET: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  /** Local testing only: replace https://slack.com/api and https://slack.com/oauth/v2/authorize and the access exchange. */
+  SLACK_API_URL?: string;
+  SLACK_OAUTH_URL?: string;
 }
 
 type SlackEventBody = {
@@ -27,8 +35,6 @@ type SlackEventBody = {
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-
-const registry = (env: Env) => env.STATION_REGISTRY.getByName("registry");
 
 async function readVerified(request: Request, env: Env): Promise<string | null> {
   const raw = await request.text();
@@ -44,9 +50,10 @@ async function readVerified(request: Request, env: Env): Promise<string | null> 
 /** Emoji name (no colons) added to a message once at least one of its links is in the rotation. */
 const ACK_REACTION = "headphones";
 
-async function announce(env: Env, origin: string, channel: string, token: string): Promise<void> {
+async function announce(env: Env, botToken: string, origin: string, channel: string, token: string): Promise<void> {
   await slackChatPost(
     env,
+    botToken,
     channel,
     `🎧 This channel is now a radio station. Post YouTube links to add songs. Tune in: ${origin}/s/${token}`,
   );
@@ -90,8 +97,18 @@ function playlistItems(reads: PlaylistRead[], taken: Set<string>, seqStart: numb
 async function handleEvent(body: SlackEventBody, origin: string, env: Env): Promise<void> {
   const event = body.event;
   const teamId = body.team_id;
+
+  // The token is dead either way: forget it, so nothing keeps calling Slack with it. Stations stay (their links keep
+  // working for listeners), and a reinstall brings a fresh token.
+  if (event?.type === "app_uninstalled" || event?.type === "tokens_revoked") {
+    if (teamId) await registry(env).removeInstall(teamId);
+    return;
+  }
+
   const channel = event?.channel;
   if (!event || !teamId || !channel) return;
+  const botToken = await botTokenFor(env, teamId);
+  if (!botToken) return;
 
   if (event.type === "member_joined_channel") {
     if (event.user !== body.authorizations?.[0]?.user_id) return;
@@ -99,7 +116,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
     const station = env.STATION.getByName(token);
     await station.init(teamId, channel);
     await station.rearmBackfill();
-    await announce(env, origin, channel, token);
+    await announce(env, botToken, origin, channel, token);
     return;
   }
 
@@ -110,7 +127,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   if (ids.length === 0 && playlistIds.length === 0) return;
 
   const { token, created } = await registry(env).ensureStation(teamId, channel);
-  if (created) await announce(env, origin, channel, token);
+  if (created) await announce(env, botToken, origin, channel, token);
 
   const threadTs = event.thread_ts ?? event.ts;
   const [metas, reads] = await Promise.all([Promise.all(ids.map((id) => fetchVideoMeta(id))), readPlaylists(playlistIds)]);
@@ -124,13 +141,14 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   const pl = playlistItems(reads, new Set(ids), ids.length);
 
   // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
-  const adder = { id: event.user ?? null, name: await resolveSlackName(env, event.user) };
+  const adder = { id: event.user ?? null, name: await resolveSlackName(env, teamId, event.user) };
   const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items, adder, pl.items);
   if (!accepted) return;
-  if (items.length > 0 || pl.items.length > 0) await slackReact(env, channel, event.ts, ACK_REACTION);
+  if (items.length > 0 || pl.items.length > 0) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
   for (const videoId of unavailable) {
     await slackChatPost(
       env,
+      botToken,
       channel,
       `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
       threadTs,
@@ -140,6 +158,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
     const cap = p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} videos per playlist)` : "";
     await slackChatPost(
       env,
+      botToken,
       channel,
       `🎶 ${p.added} ${p.added === 1 ? "video" : "videos"} from “${slackEscape(p.title)}” in the rotation${cap}`,
       threadTs,
@@ -148,6 +167,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   for (const id of pl.failed) {
     await slackChatPost(
       env,
+      botToken,
       channel,
       `⚠️ Couldn't read https://www.youtube.com/playlist?list=${id} — it may be private, or an album or auto-generated playlist`,
       threadTs,
@@ -161,10 +181,9 @@ async function slackEvents(request: Request, env: Env, ctx: ExecutionContext): P
   const body = JSON.parse(raw) as SlackEventBody;
   if (body.type === "url_verification") return json({ challenge: body.challenge });
   if (body.type === "event_callback") {
-    if (!env.SLACK_TEAM_ID || env.SLACK_TEAM_ID === body.team_id) {
-      // Slack's deadline is 3 s and it retries on timeout, so ack first.
-      ctx.waitUntil(handleEvent(body, new URL(request.url).origin, env).catch((e) => console.error("handleEvent", e)));
-    }
+    // Slack's deadline is 3 s and it retries on timeout, so ack first. Workspaces without an install are ignored in
+    // handleEvent: the signature already proves the request came from Slack, and there is no token to act with.
+    ctx.waitUntil(handleEvent(body, new URL(request.url).origin, env).catch((e) => console.error("handleEvent", e)));
   }
   return new Response(null, { status: 200 });
 }
@@ -176,7 +195,10 @@ async function slackCommands(request: Request, env: Env): Promise<Response> {
   const teamId = form.get("team_id");
   const channelId = form.get("channel_id");
   if (!teamId || !channelId) return new Response("bad request", { status: 400 });
-  if (env.SLACK_TEAM_ID && env.SLACK_TEAM_ID !== teamId) return new Response("forbidden", { status: 403 });
+  if (!(await botTokenFor(env, teamId))) {
+    const origin = new URL(request.url).origin;
+    return json({ response_type: "ephemeral", text: `viberadio is not installed in this workspace. Add it at ${origin}` });
+  }
   const { token } = await registry(env).ensureStation(teamId, channelId);
   await env.STATION.getByName(token).init(teamId, channelId);
   return json({ response_type: "ephemeral", text: `🎧 Tune in: ${new URL(request.url).origin}/s/${token}` });
@@ -255,8 +277,14 @@ export default {
     const url = new URL(request.url);
     const { pathname } = url;
 
+    // The landing page shows "Add to Slack" only when the server can complete an install.
+    if (request.method === "GET" && pathname === "/api/config") {
+      return json({ installable: Boolean(env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) });
+    }
     if (request.method === "POST" && pathname === "/slack/events") return slackEvents(request, env, ctx);
     if (request.method === "POST" && pathname === "/slack/commands") return slackCommands(request, env);
+    if (request.method === "GET" && pathname === "/slack/install") return startInstall(request, env);
+    if (request.method === "GET" && pathname === "/slack/oauth/callback") return finishInstall(request, env);
 
     const add = pathname.match(/^\/api\/station\/([^/]+)\/add$/);
     if (request.method === "POST" && add) return addFromWeb(request, env, add[1]);

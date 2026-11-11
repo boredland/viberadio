@@ -1,3 +1,4 @@
+import { botTokenFor } from "./install";
 import type { Env } from "./index";
 import { slackApi } from "./slack";
 
@@ -21,19 +22,24 @@ type UserInfo = {
 
 /**
  * Slack user id -> display name, or null when it cannot be resolved (the bot lacks `users:read`, the user is gone, Slack
- * is slow). Callers treat null as "unknown" and the UI shows nothing rather than an opaque id. Never throws.
+ * is slow, the workspace has no token). Callers treat null as "unknown" and the UI shows nothing rather than an opaque
+ * id. Never throws.
  *
  * The cache is per isolate and per Worker, not per station: the same person posts in many stations, and a name lookup is
  * a Slack API call counted against the 50-subrequest budget of the invocation, so it must not repeat for every track.
+ * It is keyed by workspace as well, since ids are only guaranteed unique within one.
  */
-export async function resolveSlackName(env: Env, userId: string | undefined): Promise<string | null> {
+export async function resolveSlackName(env: Env, teamId: string, userId: string | undefined): Promise<string | null> {
   if (!userId || !/^[UW][A-Z0-9]+$/.test(userId)) return null;
-  const hit = cache.get(userId);
+  const key = `${teamId}:${userId}`;
+  const hit = cache.get(key);
   if (hit && hit.until > Date.now()) return hit.name;
 
   let name: string | null = null;
   try {
-    const res = await slackApi("users.info", env.SLACK_BOT_TOKEN, { user: userId }, LOOKUP_TIMEOUT_MS);
+    const token = await botTokenFor(env, teamId);
+    if (!token) return null;
+    const res = await slackApi(env, "users.info", token, { user: userId }, LOOKUP_TIMEOUT_MS);
     const body = (await res.json()) as UserInfo;
     if (body.ok && body.user) {
       name = body.user.profile?.display_name?.trim() || body.user.profile?.real_name?.trim() || body.user.real_name?.trim() || null;
@@ -45,6 +51,6 @@ export async function resolveSlackName(env: Env, userId: string | undefined): Pr
   }
 
   if (cache.size >= CACHE_CAP) cache.delete(cache.keys().next().value as string);
-  cache.set(userId, { name, until: Date.now() + (name ? HIT_TTL_MS : MISS_TTL_MS) });
+  cache.set(key, { name, until: Date.now() + (name ? HIT_TTL_MS : MISS_TTL_MS) });
   return name;
 }

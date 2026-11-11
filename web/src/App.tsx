@@ -1,15 +1,9 @@
 import { useEffect, useState } from "react";
-import { InstallBar, isStandalone, lastStation, rememberStation } from "./pwa";
+import { isStandalone, lastStation, rememberStation } from "./pwa";
+import { Landing } from "./Landing";
 import { Share } from "./Share";
 import { Station } from "./Station";
-import { Win } from "./ui";
 import { Backdrop } from "./Backdrop";
-
-const LOGO = String.raw`
- __   _____ ___ ___ ___    _   ___ ___ ___
- \ \ / /_ _| _ ) __| _ \  /_\ |   \_ _/ _ \
-  \ V / | || _ \ _||   / / _ \| |) | | (_) |
-   \_/ |___|___/___|_|_\/_/ \_\___/___\___/`;
 
 /** Browsers report this on the window; it flips as the device loses and regains a connection. */
 function useOnline(): boolean {
@@ -56,25 +50,7 @@ export function App() {
       ) : token ? (
         <Station token={decodeURIComponent(token)} online={online} />
       ) : resume ? null : (
-        <main className="stack">
-          <Win title="VIBERADIO">
-            <pre className="logo">{LOGO}</pre>
-            <p className="boot">
-              {"> "}one channel. one radio. everyone in sync.
-              {"\n> "}add the <b>viberadio</b> bot to a Slack channel
-              {"\n> "}run <b>/viberadio</b> for your link
-              {"\n> "}post YouTube links to queue tracks
-              <span className="blink">_</span>
-            </p>
-          </Win>
-          {!online && (
-            <Win title="OFFLINE">
-              <p className="lcd-text err">NO SIGNAL</p>
-              <p className="dim">You're offline. Open your station link once you're back online.</p>
-            </Win>
-          )}
-          <InstallBar />
-        </main>
+        <Landing online={online} />
       )}
     </>
   );

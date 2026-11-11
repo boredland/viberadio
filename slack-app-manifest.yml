@@ -12,6 +12,8 @@ features:
       description: Get this channel's radio tune-in link
       should_escape: false
 oauth_config:
+  redirect_urls:
+    - https://slackdj.jonas-strassel.de/slack/oauth/callback
   scopes:
     bot:
       - channels:history
@@ -26,6 +28,8 @@ settings:
     bot_events:
       - message.channels
       - member_joined_channel
+      - app_uninstalled
+      - tokens_revoked
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

@@ -1,7 +1,5 @@
-export type SlackEnv = {
-  SLACK_BOT_TOKEN: string;
-  SLACK_SIGNING_SECRET: string;
-};
+/** The part of the Worker environment the Slack helpers read: an override of the API base, for local testing only. */
+export type SlackEnv = { SLACK_API_URL?: string };
 
 const encoder = new TextEncoder();
 
@@ -48,12 +46,13 @@ export function isUserMessage(m: SlackMessage): boolean {
 }
 
 export function slackApi(
+  env: SlackEnv,
   method: string,
   token: string,
   params: Record<string, string>,
   timeoutMs?: number,
 ): Promise<Response> {
-  return fetch(`https://slack.com/api/${method}`, {
+  return fetch(`${env.SLACK_API_URL ?? "https://slack.com/api"}/${method}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: new URLSearchParams(params),
@@ -69,12 +68,13 @@ export function slackEscape(text: string): string {
 /** Never retried: retrying a bot message is how event storms start. */
 export async function slackChatPost(
   env: SlackEnv,
+  token: string,
   channel: string,
   text: string,
   threadTs?: string,
 ): Promise<void> {
   try {
-    const res = await slackApi("chat.postMessage", env.SLACK_BOT_TOKEN, {
+    const res = await slackApi(env, "chat.postMessage", token, {
       channel,
       text,
       ...(threadTs ? { thread_ts: threadTs } : {}),
@@ -87,9 +87,9 @@ export async function slackChatPost(
 }
 
 /** `already_reacted` is expected when Slack redelivers an event, so it is not logged. Never retried, like chat posts. */
-export async function slackReact(env: SlackEnv, channel: string, ts: string, name: string): Promise<void> {
+export async function slackReact(env: SlackEnv, token: string, channel: string, ts: string, name: string): Promise<void> {
   try {
-    const res = await slackApi("reactions.add", env.SLACK_BOT_TOKEN, { channel, timestamp: ts, name });
+    const res = await slackApi(env, "reactions.add", token, { channel, timestamp: ts, name });
     const body = (await res.json()) as { ok: boolean; error?: string };
     if (!body.ok && body.error !== "already_reacted") console.error("reactions.add failed:", body.error);
   } catch (err) {

@@ -1,4 +1,7 @@
-SLACK_BOT_TOKEN=
 SLACK_SIGNING_SECRET=
-# Optional: reject events from any other workspace
+# Public install (Add to Slack): Basic Information -> App Credentials
+SLACK_CLIENT_ID=
+SLACK_CLIENT_SECRET=
+# Your own workspace without OAuth: a bot token, used only for the workspace named below
+SLACK_BOT_TOKEN=
 SLACK_TEAM_ID=

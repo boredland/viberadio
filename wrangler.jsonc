@@ -3,6 +3,8 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-11-10",
   "routes": [{ "pattern": "slackdj.jonas-strassel.de", "custom_domain": true }],
+  // The workspace the SLACK_BOT_TOKEN secret belongs to. Other workspaces use the token from their own install.
+  "vars": { "SLACK_TEAM_ID": "T0CFPA5GJKB" },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

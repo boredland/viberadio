@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { ClientMessage, CurrentTrack, LibraryPage, ServerMessage, StateMessage, Track } from "../../shared/protocol";
 import type { Env } from "./index";
 import { extractVideoIds } from "../../shared/video";
+import { botTokenFor } from "./install";
 import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
 import { fetchVideoMeta } from "./youtube";
@@ -395,7 +396,7 @@ export class Station extends DurableObject<Env> {
   private async adderName(videoId: string, id: string | null, name: string | null): Promise<string | null> {
     if (name || !id) return name;
     if (id === "web") return WEB_ADDER;
-    const resolved = await resolveSlackName(this.env, id);
+    const resolved = await resolveSlackName(this.env, this.st().teamId, id);
     // Same binding as fillNames: only write the name if the row still belongs to the poster it was resolved for.
     if (resolved) {
       this.ctx.storage.sql.exec(
@@ -411,7 +412,7 @@ export class Station extends DurableObject<Env> {
   /** Resolves missing names for a page of rows, one lookup per distinct poster. */
   private async fillNames(rows: LibraryRow[]): Promise<void> {
     const need = [...new Set(rows.filter((r) => !r.added_by && r.added_by_id && r.added_by_id !== "web").map((r) => r.added_by_id!))];
-    const names = await Promise.all(need.map((id) => resolveSlackName(this.env, id)));
+    const names = await Promise.all(need.map((id) => resolveSlackName(this.env, this.st().teamId, id)));
     const byId = new Map(need.map((id, i) => [id, names[i]]));
     for (const r of rows) {
       if (r.added_by || !r.added_by_id) continue;
@@ -532,7 +533,12 @@ export class Station extends DurableObject<Env> {
    */
   private async readHistoryPage(s: StationState, cursor: string | null, pass: { failures?: number }) {
     try {
-      const res = await slackApi("conversations.history", this.env.SLACK_BOT_TOKEN, {
+      const token = await botTokenFor(this.env, s.teamId);
+      if (!token) {
+        // No install for this workspace (uninstalled, or never completed): the same permanent outcome as a revoked token.
+        return { ok: false as const, error: "token_revoked" };
+      }
+      const res = await slackApi(this.env, "conversations.history", token, {
         channel: s.channelId,
         limit: "200",
         ...(cursor ? { cursor } : {}),
