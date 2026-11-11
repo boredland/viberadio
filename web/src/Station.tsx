@@ -390,8 +390,8 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                       <path d="M12.5 1.2h2l-2 2.3h2" />
                       {keepAwake.wanted && (
                         <>
-                          <path d="M2 14 14 2" stroke="var(--lcd)" strokeWidth="2.6" />
-                          <path d="M2 14 14 2" strokeWidth="1.3" />
+                          <path d="M2 2 14 14" style={{ stroke: "var(--lcd)" }} strokeWidth="2.6" />
+                          <path d="M2 2 14 14" strokeWidth="1.3" />
                         </>
                       )}
                     </svg>
