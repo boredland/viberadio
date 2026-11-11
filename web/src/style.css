@@ -327,20 +327,6 @@ input[type="range"]::-moz-range-thumb {
   border: 1px solid #000;
 }
 
-/* ---- equalizer panel ---- */
-.eqp { display: grid; gap: 8px; margin-top: 8px; }
-.eqp-presets { display: flex; flex-wrap: wrap; gap: 6px; }
-.eqp-sliders { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px; align-items: end; }
-.eqp-col { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: var(--accent-dim); letter-spacing: 0.05em; }
-/* Vertical, top = boost. The fill gradient used by the horizontal sliders does not apply, so the track is plain. */
-.eqp-col input[type="range"] {
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 10px;
-  height: 90px;
-  background: #000;
-}
-
 .banner {
   margin: 0;
   padding: 6px 8px;

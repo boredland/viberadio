@@ -1,11 +1,9 @@
 import { useSyncExternalStore } from "react";
-import { buildChain, loadEq, type EqChain } from "./eq";
 
 /**
  * Opt-in "real" equalizer. The YouTube iframe exposes no audio, so this listens to what the browser itself plays: the user
- * shares THIS tab with its audio, and an AnalyserNode reads the shared track. Nothing is recorded, stored or sent anywhere.
- * In the plain mode the capture is never routed back to the speakers, so playback is unaffected. In EQ mode the tab's own
- * output is suppressed and the captured copy is played back through the equalizer instead (see eq.ts).
+ * shares THIS tab with its audio, and an AnalyserNode reads the shared track. Nothing is recorded, stored or sent anywhere,
+ * and the capture is never routed back to the speakers (that would double the sound), so playback is unaffected.
  *
  * Chromium on desktop only (Firefox and Safari give no audio track for getDisplayMedia, so the toggle is hidden there; phones
  * have no tab audio). The picker is browser UI and the user can stop at any time from the browser's own "Stop sharing" bar.
@@ -14,7 +12,7 @@ import { buildChain, loadEq, type EqChain } from "./eq";
 export type TabAudioState =
   | { status: "off" }
   | { status: "starting" }
-  | { status: "on"; eq: boolean }
+  | { status: "on" }
   | { status: "failed"; reason: "unsupported" | "denied" | "no-audio" | "error" };
 
 const BARS = 20;
@@ -31,8 +29,6 @@ let ctx: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
 let bins: Uint8Array<ArrayBuffer> | null = null;
 const levels = new Float32Array(BARS);
-/** Set only in EQ mode: the captured copy is played back through this chain, so the station volume and mute act on it. */
-let eqChain: EqChain | null = null;
 
 export function tabAudioSupported(): boolean {
   return (
@@ -78,8 +74,6 @@ function teardown(): void {
   stream = null;
   analyser = null;
   bins = null;
-  eqChain?.disconnect();
-  eqChain = null;
   levels.fill(0);
   void ctx?.close().catch(() => {});
   ctx = null;
@@ -107,7 +101,7 @@ function resumeWithin(c: AudioContext, ms: number): Promise<void> {
 /**
  * Must run inside a click handler: getDisplayMedia needs a user gesture, and an `await` before it can lose that gesture.
  */
-export async function startTabAudio(withEq = false, outputGain = 1): Promise<void> {
+export async function startTabAudio(): Promise<void> {
   if (state.status === "starting" || state.status === "on") return;
   if (!tabAudioSupported()) return set({ status: "failed", reason: "unsupported" });
   const gen = ++generation;
@@ -124,9 +118,7 @@ export async function startTabAudio(withEq = false, outputGain = 1): Promise<voi
     // Video is required by Chrome even when only the audio is wanted; the video track is disabled right after.
     const s = await navigator.mediaDevices.getDisplayMedia({
       video: true,
-      // In EQ mode the tab's own output is suppressed so only the filtered copy is heard. Whether the filtered copy, which is
-      // also tab audio, escapes that suppression is not documented and has to be checked in a real browser.
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: withEq },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       selfBrowserSurface: "include",
       preferCurrentTab: true,
       systemAudio: "exclude",
@@ -167,10 +159,8 @@ export async function startTabAudio(withEq = false, outputGain = 1): Promise<voi
     a.minDecibels = -90;
     a.maxDecibels = -10;
     a.smoothingTimeConstant = 0.3;
-    // The analyser only reads. Without EQ mode nothing reaches ctx.destination, so the captured copy never plays a second time.
+    // Analyser only: deliberately not connected to ctx.destination, so the captured copy never plays a second time.
     src.connect(a);
-    let chain: EqChain | null = null;
-    if (withEq) chain = buildChain(c, src, c.destination, loadEq(), outputGain);
 
     // "Stop sharing" during the resume wait ends the track before `stream` is published, so the listener above saw nothing.
     // Publishing it would show REAL EQ as on over silent bars, so refuse a track that is already dead.
@@ -183,9 +173,8 @@ export async function startTabAudio(withEq = false, outputGain = 1): Promise<voi
     stream = s;
     ctx = c;
     analyser = a;
-    eqChain = chain;
     bins = new Uint8Array(new ArrayBuffer(a.frequencyBinCount));
-    set({ status: "on", eq: withEq });
+    set({ status: "on" });
   } catch (err) {
     release();
     if (abandoned()) return;
@@ -194,15 +183,6 @@ export async function startTabAudio(withEq = false, outputGain = 1): Promise<voi
     set({ status: "failed", reason: name === "NotAllowedError" || name === "AbortError" ? "denied" : "error" });
   }
 }
-
-/** True while the captured copy is being played through the equalizer. */
-export const eqActive = (): boolean => eqChain !== null;
-
-/** Live EQ controls; no-ops outside EQ mode. */
-export const setEqBand = (i: number, db: number): void => eqChain?.setBand(i, db);
-export const setEqPreamp = (db: number): void => eqChain?.setPreamp(db);
-/** Linear 0..1 gain: the station volume (and 0 while muted), since YouTube's own level no longer reaches the speakers. */
-export const setEqOutput = (gain: number): void => eqChain?.setOutput(gain);
 
 /**
  * 0..1 level for each of the 20 bars, or null when capture is not running. Bars are log-spaced across 60 Hz to 14 kHz, since
