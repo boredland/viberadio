@@ -908,6 +908,148 @@ const SNOW_STARS = (() => {
   return Array.from({ length: 60 }, () => ({ x: rnd(), y: rnd() * 0.5, size: 0.8 + rnd() * 1.4, phase: rnd() * 6.28 }));
 })();
 
+/** Santa is a seasonal extra: 1 to 26 December on the viewer's own calendar. */
+function isChristmasSeason(now: Date = new Date()): boolean {
+  return now.getMonth() === 11 && now.getDate() <= 26;
+}
+
+/** The scene clock starts at page load, so the first flight comes a few seconds in, then one every 70 s. */
+const SANTA_FIRST_MS = 8000;
+const SANTA_PERIOD_MS = 70_000;
+const SANTA_FLIGHT_MS = 14_000;
+
+/** One reindeer in local units, facing right and centred on its body. The lead one has a glowing red nose. */
+function drawReindeer(ctx: CanvasRenderingContext2D, t: number, i: number, lead: boolean, glow: number): void {
+  ctx.save();
+  ctx.translate(0, Math.sin(t / 260 + i * 1.7) * 0.5);
+  ctx.strokeStyle = "#7a4a2b";
+  ctx.lineWidth = 0.35;
+  ctx.lineCap = "round";
+  for (const [lx, ph] of [[-1.2, 0], [-0.7, 1.4], [1.0, 0.7], [1.5, 2.1]]) {
+    const a = Math.sin(t / 150 + i * 2.1 + ph) * 0.7;
+    ctx.beginPath();
+    ctx.moveTo(lx, 0.5);
+    ctx.lineTo(lx + Math.sin(a) * 1.6, 0.5 + Math.cos(a) * 1.4);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#b8794a";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 2, 0.95, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(2.4, -0.9, 0.7, 0.55, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#e8d5b0";
+  ctx.lineWidth = 0.2;
+  ctx.beginPath();
+  ctx.moveTo(2.5, -1.4);
+  ctx.lineTo(2.2, -2.6);
+  ctx.moveTo(2.3, -2.1);
+  ctx.lineTo(1.7, -2.3);
+  ctx.moveTo(2.7, -1.4);
+  ctx.lineTo(3.2, -2.5);
+  ctx.moveTo(3.0, -2.0);
+  ctx.lineTo(3.5, -2.1);
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(-2, -0.3, 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  if (lead) {
+    const g = ctx.createRadialGradient(3.05, -0.8, 0, 3.05, -0.8, 1.6);
+    g.addColorStop(0, `rgba(255, 70, 50, ${(0.55 * glow).toFixed(3)})`);
+    g.addColorStop(1, "rgba(255, 70, 50, 0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(1.4, -2.4, 3.2, 3.2);
+    ctx.fillStyle = "#ff3b30";
+    ctx.beginPath();
+    ctx.arc(3.05, -0.8, 0.28, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** Sleigh, Santa, two reindeer and a trail of sparkles, in local units facing right, origin at the sleigh's middle. */
+function drawSanta(ctx: CanvasRenderingContext2D, t: number, glow: number): void {
+  for (let j = 0; j < 14; j++) {
+    const f = 1 - j / 14;
+    ctx.fillStyle = `rgba(255, 226, 140, ${(0.8 * f * glow).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(-6 - j * 1.5, 0.5 + Math.sin(j * 1.1 + t / 180) * 1.1, 0.1 + 0.45 * f, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(255, 230, 160, 0.6)";
+  ctx.lineWidth = 0.12;
+  ctx.beginPath();
+  ctx.moveTo(5.4, -0.8);
+  ctx.lineTo(9.5, 0);
+  ctx.lineTo(15.5, 0);
+  ctx.stroke();
+  ctx.strokeStyle = "#e0b84a";
+  ctx.lineWidth = 0.3;
+  ctx.beginPath();
+  ctx.moveTo(-4.6, 2.5);
+  ctx.lineTo(4.2, 2.5);
+  ctx.quadraticCurveTo(6.2, 2.5, 5.6, 0.6);
+  ctx.moveTo(-2.5, 1.4);
+  ctx.lineTo(-2.5, 2.5);
+  ctx.moveTo(2.5, 1.4);
+  ctx.lineTo(2.5, 2.5);
+  ctx.stroke();
+  ctx.fillStyle = "#c0392b";
+  ctx.beginPath();
+  ctx.moveTo(-4.4, -2);
+  ctx.lineTo(4.2, -2.4);
+  ctx.quadraticCurveTo(5.6, -2.4, 5.2, -0.6);
+  ctx.lineTo(3.8, 1.5);
+  ctx.lineTo(-3.4, 1.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#e0b84a";
+  ctx.lineWidth = 0.25;
+  ctx.beginPath();
+  ctx.moveTo(-3.6, -0.4);
+  ctx.lineTo(4.4, -0.6);
+  ctx.stroke();
+  ctx.fillStyle = "#8a5a35";
+  ctx.beginPath();
+  ctx.ellipse(-3.2, -2.9, 1.5, 1.3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#d8392b";
+  ctx.beginPath();
+  ctx.ellipse(0.2, -2.9, 1.4, 1.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#f2c9a6";
+  ctx.beginPath();
+  ctx.arc(0.4, -5, 0.75, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.ellipse(0.75, -4.6, 0.6, 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#d8392b";
+  ctx.beginPath();
+  ctx.moveTo(-0.5, -5.5);
+  ctx.lineTo(1.3, -5.5);
+  ctx.lineTo(-1.0, -7.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(-0.5, -5.7, 1.8, 0.4);
+  ctx.beginPath();
+  ctx.arc(-1.0, -7.2, 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.save();
+  ctx.translate(9.5, 0);
+  drawReindeer(ctx, t, 0, false, glow);
+  ctx.restore();
+  ctx.save();
+  ctx.translate(15.5, 0);
+  drawReindeer(ctx, t, 1, true, glow);
+  ctx.restore();
+}
+
 /**
  * Snow: a clear winter night. Stars and a moon, a soft aurora, snowy pines on two ridges and a frozen lake, with snow
  * falling through all of it.
@@ -916,9 +1058,12 @@ const SNOW_STARS = (() => {
  *    sideways.
  *  - Without it the snow drifts gently and the aurora barely moves, so the backdrop stays mute. Reduced motion paints one
  *    still frame.
+ *  - From 1 to 26 December, Santa's sleigh crosses the sky now and then, glowing a little more on a kick. It needs the
+ *    animation clock, so under reduced motion he never appears.
  */
 const snowScene: Scene = (w, h) => {
   const hy = h * 0.7;
+  const christmas = isChristmasSeason();
   let lastGust = -Infinity;
   let prevBass = 0;
   let gust = 0;
@@ -1040,6 +1185,24 @@ const snowScene: Scene = (w, h) => {
     ctx.beginPath();
     ctx.arc(mx, my, mr, 0, Math.PI * 2);
     ctx.fill();
+
+    // Santa: one flight every SANTA_PERIOD_MS, alternating direction, drawn in front of the moon and behind the pines and
+    // snow. Reduced motion passes t = 0, which is before the first flight, so he never shows there.
+    if (christmas && t >= SANTA_FIRST_MS) {
+      const since = (t - SANTA_FIRST_MS) % SANTA_PERIOD_MS;
+      if (since < SANTA_FLIGHT_MS) {
+        const p = since / SANTA_FLIGHT_MS;
+        const dir = Math.floor((t - SANTA_FIRST_MS) / SANTA_PERIOD_MS) % 2 === 0 ? 1 : -1;
+        const u = Math.max(5, Math.min(w, h) * 0.009);
+        const x = dir === 1 ? -30 * u + p * (w + 60 * u) : w + 30 * u - p * (w + 60 * u);
+        const y = hy * 0.5 - Math.sin(p * Math.PI) * hy * 0.05;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(dir * u, u);
+        drawSanta(ctx, t, 0.7 + 0.3 * auroraPulse);
+        ctx.restore();
+      }
+    }
 
     // Far ridge of snow, then pines, then the frozen lake.
     ctx.fillStyle = "#1b2f48";
