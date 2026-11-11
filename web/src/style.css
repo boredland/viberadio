@@ -110,7 +110,9 @@ body::after {
   pointer-events: none;
 }
 /* The rain only: its original strength was a veil at 22%, not the full-weight paint the other scenes use. */
-.backdrop[data-scene="matrix"] { opacity: 0.22; }
+.backdrop[data-scene="matrix"] { opacity: 0.22; transition: opacity 0.4s; }
+/* With REAL EQ on the rain is a spectrum, so it needs more than a veil. */
+.backdrop[data-scene="matrix"][data-live] { opacity: 0.7; }
 
 /* Kivo: the decoded loop is drawn on a canvas, so the field and the centre tile are painted in Backdrop.tsx. */
 .kivo-scene { overflow: hidden; background: var(--bg); }

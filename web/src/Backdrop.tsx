@@ -169,7 +169,11 @@ const GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄ0123
 const MATRIX_STEP_MS = 60;
 const MATRIX_SIZE = 16;
 
-/** Falling glyphs in the theme's accent colour; they brighten with the bass when REAL EQ is on. */
+/**
+ * Falling glyphs in the theme's accent colour. With REAL EQ on every column follows one spectrum band (bass at the left edge,
+ * treble at the right): a loud band rains faster, brighter, and its hottest glyphs turn white. Without it the calm rain plays
+ * and only brightens a little with the bass.
+ */
 const matrixScene: Scene = (w, h) => {
   // Columns start off-screen so they rain in from the top. The first frame is the whole picture for reduced-motion users,
   // so it must already be populated: a static grid of glyphs, still drawn on the next advance for the animated case.
@@ -189,6 +193,7 @@ const matrixScene: Scene = (w, h) => {
     last = t;
     ctx.fillStyle = `rgba(${c.bgRgb}, 0.12)`;
     ctx.fillRect(0, 0, w, h);
+    const bands = audio?.bands.length ? audio.bands : null;
     ctx.fillStyle = `rgba(${c.accentRgb}, ${0.7 + 0.3 * pulseOf(audio)})`;
     ctx.font = `${MATRIX_SIZE}px ui-monospace, Menlo, monospace`;
     const rows = Math.ceil(h / MATRIX_SIZE) + 1;
@@ -199,10 +204,21 @@ const matrixScene: Scene = (w, h) => {
       seeded = true;
     }
     for (let i = 0; i < drops.length; i++) {
-      ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * MATRIX_SIZE, drops[i] * MATRIX_SIZE);
-      if (drops[i] * MATRIX_SIZE > h && Math.random() > 0.975) drops[i] = 0;
-      drops[i] += 1;
+      let steps = 1;
+      if (bands) {
+        const level = bands[Math.min(bands.length - 1, Math.floor((i / drops.length) * bands.length))];
+        steps = 1 + (level > 0.35 ? 1 : 0) + (level > 0.7 ? 1 : 0);
+        ctx.fillStyle = level > 0.6 ? c.peak : c.accent;
+        ctx.globalAlpha = 0.3 + 0.7 * level;
+      }
+      // A fast column still draws every row it passes, so it leaves a solid streak, not gaps.
+      for (let s = 0; s < steps; s++) {
+        ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * MATRIX_SIZE, drops[i] * MATRIX_SIZE);
+        if (drops[i] * MATRIX_SIZE > h && Math.random() > 0.975) drops[i] = 0;
+        drops[i] += 1;
+      }
     }
+    ctx.globalAlpha = 1;
   };
 };
 
@@ -543,7 +559,13 @@ function CanvasBackdrop({ bg, theme }: { bg: BackgroundId; theme: string }) {
     let painter: Painter = () => {};
 
     const drive = createDrive();
-    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : drive(readLevels(), t));
+    const draw = (t: number) => {
+      const a = calm ? null : drive(readLevels(), t);
+      // The matrix is veiled at 22% in CSS; with real audio the veil lifts so the spectrum reads.
+      if (a) el.dataset.live = "1";
+      else delete el.dataset.live;
+      painter(ctx, calm ? 0 : t, a);
+    };
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
