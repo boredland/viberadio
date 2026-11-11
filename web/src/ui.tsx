@@ -73,7 +73,7 @@ export function Visualizer({ active }: { active: boolean }) {
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
-      if (t - last < 45) return;
+      if (t - last < 33) return;
       last = t;
       const w = el.width;
       const h = el.height;
@@ -94,7 +94,8 @@ export function Visualizer({ active }: { active: boolean }) {
         } else {
           target[i] = 0;
         }
-        level[i] += (target[i] - level[i]) * 0.45;
+        // Snap up on a rise, fall back more slowly: a kick should land when it is heard, not a few frames later.
+        level[i] += (target[i] - level[i]) * (target[i] > level[i] ? 0.85 : 0.4);
         peak[i] = Math.max(level[i], peak[i] - 0.03);
         const segs = Math.round(level[i] * 10);
         for (let s = 0; s < segs; s++) {

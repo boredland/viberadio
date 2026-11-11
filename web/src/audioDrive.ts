@@ -5,11 +5,11 @@ const BAND = 0.3;
 
 /**
  * The backdrop fills the screen, so a hard full-strength flash per kick is a photosensitivity risk (WCAG 2.3.1 limits
- * flashes to three per second). The bass pulse is capped below full, rises over ~50 ms and falls over ~250 ms, which
- * rounds off the edges a raw per-frame value would have.
+ * flashes to three per second). The bass pulse is capped well below full (0.4), rises over ~30 ms and falls over ~250 ms,
+ * which rounds off the edges a raw per-frame value would have and keeps the full-screen effect gentle.
  */
-const BASS_CAP = 0.6;
-const ATTACK_MS = 50;
+const BASS_CAP = 0.4;
+const ATTACK_MS = 30;
 const RELEASE_MS = 250;
 /** How slowly the bass baseline follows the music: a kick is the jump above it, so steady loud bass reads as quiet. */
 const BASELINE_MS = 1500;

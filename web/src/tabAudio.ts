@@ -158,7 +158,7 @@ export async function startTabAudio(): Promise<void> {
     // -90..-10 keeps headroom: a moderately loud tone lands mid-scale and only genuinely hot peaks reach the top.
     a.minDecibels = -90;
     a.maxDecibels = -10;
-    a.smoothingTimeConstant = 0.6;
+    a.smoothingTimeConstant = 0.3;
     // Analyser only: deliberately not connected to ctx.destination, so the captured copy never plays a second time.
     src.connect(a);
 

@@ -39,7 +39,7 @@ const STARS = (() => {
 const pulseOf = (audio: Drive | null): number => audio?.bass ?? 0;
 
 /** Stars and glints brighten with the real high end; 1 (no change) without tab audio. */
-const shimmerGain = (audio: Drive | null): number => 1 + 1.5 * (audio?.treble ?? 0);
+const shimmerGain = (audio: Drive | null): number => 1 + 1.0 * (audio?.treble ?? 0);
 
 /**
  * A scene is built for one canvas size and returns its frame painter. State that lives across frames (the matrix columns)
