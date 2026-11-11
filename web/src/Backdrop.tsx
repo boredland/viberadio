@@ -908,13 +908,21 @@ const SNOW_STARS = (() => {
   return Array.from({ length: 60 }, () => ({ x: rnd(), y: rnd() * 0.5, size: 0.8 + rnd() * 1.4, phase: rnd() * 6.28 }));
 })();
 
+/**
+ * The one place the Christmas extra reads the clock. Tests override this hook instead of stubbing the global Date.
+ * Not part of any public API; a browser test sets `(window as { __viberadioNow?: () => number }).__viberadioNow`.
+ */
+function nowMs(): number {
+  return (globalThis as { __viberadioNow?: () => number }).__viberadioNow?.() ?? Date.now();
+}
+
 /** Santa is a seasonal extra: 1 to 26 December on the viewer's own calendar. */
-function isChristmasSeason(now: Date = new Date()): boolean {
+function isChristmasSeason(): boolean {
+  const now = new Date(nowMs());
   return now.getMonth() === 11 && now.getDate() <= 26;
 }
 
-/** The scene clock starts at page load, so the first flight comes a few seconds in, then one every 70 s. */
-const SANTA_FIRST_MS = 8000;
+/** Flights are keyed to the wall clock, so every listener sees the same flight at the same moment, whenever they joined. */
 const SANTA_PERIOD_MS = 70_000;
 const SANTA_FLIGHT_MS = 14_000;
 
@@ -1063,7 +1071,6 @@ function drawSanta(ctx: CanvasRenderingContext2D, t: number, glow: number): void
  */
 const snowScene: Scene = (w, h) => {
   const hy = h * 0.7;
-  const christmas = isChristmasSeason();
   let lastGust = -Infinity;
   let prevBass = 0;
   let gust = 0;
@@ -1186,24 +1193,6 @@ const snowScene: Scene = (w, h) => {
     ctx.arc(mx, my, mr, 0, Math.PI * 2);
     ctx.fill();
 
-    // Santa: one flight every SANTA_PERIOD_MS, alternating direction, drawn in front of the moon and behind the pines and
-    // snow. Reduced motion passes t = 0, which is before the first flight, so he never shows there.
-    if (christmas && t >= SANTA_FIRST_MS) {
-      const since = (t - SANTA_FIRST_MS) % SANTA_PERIOD_MS;
-      if (since < SANTA_FLIGHT_MS) {
-        const p = since / SANTA_FLIGHT_MS;
-        const dir = Math.floor((t - SANTA_FIRST_MS) / SANTA_PERIOD_MS) % 2 === 0 ? 1 : -1;
-        const u = Math.max(5, Math.min(w, h) * 0.009);
-        const x = dir === 1 ? -30 * u + p * (w + 60 * u) : w + 30 * u - p * (w + 60 * u);
-        const y = hy * 0.5 - Math.sin(p * Math.PI) * hy * 0.05;
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.scale(dir * u, u);
-        drawSanta(ctx, t, 0.7 + 0.3 * auroraPulse);
-        ctx.restore();
-      }
-    }
-
     // Far ridge of snow, then pines, then the frozen lake.
     ctx.fillStyle = "#1b2f48";
     ctx.beginPath();
@@ -1222,6 +1211,26 @@ const snowScene: Scene = (w, h) => {
         // the eased pulse, so a kick swings the tips out and back instead of snapping them.
         const shiver = bands ? Math.sin(t / 150 + p.phase) * (2 + th * 0.02) * auroraPulse : 0;
         pine(ctx, p.x * w, base, th, layer === 0 ? 0.7 : 0.97, shiver);
+      }
+    }
+
+    // Santa: one flight every SANTA_PERIOD_MS, alternating direction, in front of the moon and pines, behind the snow.
+    // On phones the pines are tall enough to cover him, so he flies in front of them. The path sits just above the ridge
+    // because the panels cover the upper sky at every size. Reduced motion passes t = 0, so he never shows there.
+    const wallNow = nowMs();
+    if (t >= 3000 && isChristmasSeason()) {
+      const since = wallNow % SANTA_PERIOD_MS;
+      if (since < SANTA_FLIGHT_MS) {
+        const p = since / SANTA_FLIGHT_MS;
+        const dir = Math.floor(wallNow / SANTA_PERIOD_MS) % 2 === 0 ? 1 : -1;
+        const u = Math.max(5, Math.min(w, h) * 0.009);
+        const x = dir === 1 ? -30 * u + p * (w + 60 * u) : w + 30 * u - p * (w + 60 * u);
+        const y = hy - h * 0.03 - u * 5 - Math.sin(p * Math.PI) * hy * 0.03;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(dir * u, u);
+        drawSanta(ctx, t, 0.7 + 0.3 * auroraPulse);
+        ctx.restore();
       }
     }
     const lake = ctx.createLinearGradient(0, hy, 0, h);
