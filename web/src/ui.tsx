@@ -53,7 +53,7 @@ export function Win({ title, children, className = "", fold }: { title: string; 
             {folded ? `▼ SHOW ${fold.label}` : `▲ HIDE ${fold.label}`}
           </button>
         )}
-        {fold ? <div className={folded ? (fold.keepLive ? "fold-away" : "fold-hidden") : undefined}>{children}</div> : children}
+        {fold ? <div className={`fold-inner${folded ? (fold.keepLive ? " fold-away" : " fold-hidden") : ""}`}>{children}</div> : children}
       </div>
     </section>
   );

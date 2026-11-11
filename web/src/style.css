@@ -196,9 +196,11 @@ body::after {
 .win-body { padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 /* Not just its body: an empty "VIDEO" title bar before tuning in looks like a bug. */
 .win.collapsed { display: none; }
+/* Same layout as .win-body, so the children of a foldable window keep the gap they have in a plain one. */
+.fold-inner { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 /* Folded window bodies. The player cannot use display:none (a hidden iframe can be refused playback, and the IFrame API wants
    a viewport of at least 200x200), so it is laid out at full size far off-screen instead of being removed from layout. */
-.fold-hidden { display: none; }
+.fold-inner.fold-hidden { display: none; }
 .fold-away {
   position: fixed;
   top: 0;
