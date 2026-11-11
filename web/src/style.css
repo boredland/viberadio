@@ -66,13 +66,20 @@
   --x-fg: #f0b890; --x-bg: #1a0f0a; --x-border: #3a2012; --viz-mid: #ffe066; --viz-hi: #ff5a3c; --peak: #fff1d9;
 }
 
-/* Kivo: the periwinkle tile of kivo-heart-morph.webp, with the logo's cream white. The panel stays neutral dark so the
-   bevels read the same as in the other themes. */
+/* Kivo: the product's periwinkle and the logo's cream white. The panel stays neutral dark so the bevels read the same as in
+   the other themes. */
 [data-theme="kivo"] {
   --bg: #0b0d13; --lcd: #06080f; --accent: #8598d8; --accent-rgb: 133, 152, 216; --accent-dim: #b0bfe6;
   --text: #e6ecfb; --hi: #ffffff; --list: #c3cff2; --muted: #93a3d0; --dim-text: #9aa6c4; --row: #1e2743;
   --edge: #2a3350; --rule: #232b40; --led-off: #2a3350; --fill-start: #5568a8; --quiet-edge: #2a3040;
   --x-fg: #e6ecfb; --x-bg: #151b2c; --x-border: #35406b; --viz-mid: #b0c4ff; --viz-hi: #ffb3c8; --peak: #e6ecfb;
+}
+/* EMPA: black ground and the site's lime (#cbf429) on its deep navy (#0a3556). Every text pair measured >= 4.5:1. */
+[data-theme="empa"] {
+  --bg: #000000; --lcd: #02070b; --accent: #cbf429; --accent-rgb: 203, 244, 41; --accent-dim: #a2c321;
+  --text: #e3e3e3; --hi: #ffffff; --list: #c9d6a3; --muted: #8fb0a0; --dim-text: #9aa9b3; --row: #0a2336;
+  --edge: #123a57; --rule: #0d2a40; --led-off: #1c3a52; --fill-start: #516210; --quiet-edge: #16283a;
+  --x-fg: #ced7dd; --x-bg: #08131c; --x-border: #1c3a52; --viz-mid: #e0f87f; --viz-hi: #6c869a; --peak: #f5fdd4;
 }
 
 * { box-sizing: border-box; }

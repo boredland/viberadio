@@ -553,12 +553,193 @@ const kivoScene: Scene = (w, h) => {
   };
 };
 
+/** EMPA brand colours, from empa.co: black ground, lime accent, deep navy plate, steel blue-grey. Fixed, like the kivo scene. */
+const EMPA_LIME = "203, 244, 41";
+const EMPA_OLIVE = "162, 195, 33";
+const EMPA_NAVY = "10, 53, 86";
+const EMPA_STEEL = "108, 134, 154";
+
+/** Drifting rounded "pixels" like the ones on the site's hero. Seeded, so the layout is the same on every load. */
+const EMPA_SPARKS = (() => {
+  const rnd = seeded(2024);
+  return Array.from({ length: 30 }, () => ({
+    x: rnd(),
+    y: rnd(),
+    size: 5 + rnd() * 9,
+    speed: 0.006 + rnd() * 0.014,
+    sway: rnd() * 6.28,
+    kind: rnd(),
+  }));
+})();
+
+/** The gem above the plate: a low-poly diamond, in units of a fifth of the plate. Edges index into the vertex list. */
+const EMPA_GEM = [[0, -1.15], [-0.7, -0.45], [0.7, -0.45], [-0.95, 0.15], [0.95, 0.15], [0, 1.0], [0, -0.3]] as const;
+const EMPA_GEM_EDGES = [[0, 1], [0, 2], [1, 2], [1, 3], [2, 4], [3, 5], [4, 5], [0, 6], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6]] as const;
+const EMPA_GEM_OUTLINE = [0, 1, 3, 5, 4, 2] as const;
+
+/**
+ * EMPA: black ground and a dot grid like the site's hero, with a navy slab and a lime wireframe gem (its "AI on a data
+ * foundation" picture) low in the middle.
+ *  - With REAL EQ on, the dot grid is a spectrum in rings around the slab: the bass is the ring at its edge, the treble the
+ *    outermost. The drifting pixels each follow one band, growing and brightening with it. The gem lifts and glows with the
+ *    bass, and a kick sends a ripple across the slab's plane.
+ *  - Without it the dots breathe slowly and the pixels drift, so the backdrop stays mute. Reduced motion paints one still frame.
+ */
+const empaScene: Scene = (w, h) => {
+  const gap = Math.max(22, Math.min(34, w / 44));
+  const cols = Math.ceil(w / gap) + 1;
+  const rows = Math.ceil(h / gap) + 1;
+  const cx = w / 2;
+  const cy = h * 0.62;
+  const plate = Math.min(w, h) * 0.34;
+  const side = plate / Math.SQRT2;
+  // Rings are measured on the slab's plane (flattened to half height) from its edge outward.
+  const reach = Math.hypot(Math.max(cx, w - cx), 2 * Math.max(cy, h - cy)) - plate / 2;
+  const rings: number[] = [];
+  let lastRing = -Infinity;
+  let prevBass = 0;
+
+  const iso = (ctx: CanvasRenderingContext2D, s: number, dy: number) => {
+    ctx.save();
+    ctx.translate(cx, cy + dy);
+    ctx.scale(1, 0.5);
+    ctx.rotate(Math.PI / 4);
+    ctx.beginPath();
+    ctx.roundRect(-s / 2, -s / 2, s, s, s * 0.18);
+    // The path keeps the transform it was built under; restoring now keeps stroke widths un-squashed.
+    ctx.restore();
+  };
+
+  return (ctx, t, audio) => {
+    const bands = audio?.bands.length ? audio.bands : null;
+    const pulse = audio ? Math.min(1, audio.bass / 0.4) : 0;
+    const treble = audio?.treble ?? 0;
+
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, w, h);
+    const glow = ctx.createRadialGradient(0, h * 0.8, 0, 0, h * 0.8, Math.max(w, h) * 0.6);
+    glow.addColorStop(0, `rgba(${EMPA_NAVY}, ${(0.55 + 0.2 * pulse).toFixed(3)})`);
+    glow.addColorStop(1, `rgba(${EMPA_NAVY}, 0)`);
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
+
+    // Dot grid. Each dot's distance from the slab's edge picks its band.
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = c * gap;
+        const y = r * gap;
+        const d = Math.max(0, Math.hypot(x - cx, 2 * (y - cy)) - plate / 2) / reach;
+        const lit = bands ? bands[Math.min(bands.length - 1, Math.floor(d * bands.length))] : 0;
+        if (lit > 0.12) {
+          const s = 1 + 1.2 * lit;
+          ctx.fillStyle = `rgba(${EMPA_LIME}, ${(0.18 + 0.5 * lit).toFixed(3)})`;
+          ctx.fillRect(x - s, y - s, s * 2, s * 2);
+        } else {
+          const a = 0.2 + 0.1 * Math.sin(t / 1800 + (c + r) * 0.4);
+          ctx.fillStyle = `rgba(${EMPA_STEEL}, ${a.toFixed(3)})`;
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
+      }
+    }
+
+    // Drifting pixels. With audio each follows one band.
+    for (let i = 0; i < EMPA_SPARKS.length; i++) {
+      const s = EMPA_SPARKS[i];
+      const level = bands ? bands[i % bands.length] : 0;
+      const px = s.x * w + Math.sin(t / 2500 + s.sway) * 14;
+      const py = ((((s.y - (s.speed * t) / 1000) % 1) + 1) % 1) * h;
+      const size = s.size * (1 + 0.9 * level);
+      const base = bands ? 0.3 + 0.6 * level : 0.55 + 0.25 * Math.sin(t / 1200 + s.sway);
+      const rgb = s.kind < 0.45 ? EMPA_LIME : s.kind < 0.75 ? "255, 255, 255" : EMPA_OLIVE;
+      ctx.fillStyle = `rgba(${rgb}, ${Math.min(0.95, base).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.roundRect(px, py, size, size, size * 0.28);
+      ctx.fill();
+    }
+
+    // Ripples across the slab's plane on a bass hit.
+    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastRing > 220) {
+      rings.push(t);
+      lastRing = t;
+      if (rings.length > 6) rings.shift();
+    }
+    prevBass = audio?.bass ?? 0;
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const age = (t - rings[i]) / 1500;
+      if (age >= 1) {
+        rings.splice(i, 1);
+        continue;
+      }
+      iso(ctx, side * (1 + 4 * age), 0);
+      ctx.strokeStyle = `rgba(${EMPA_LIME}, ${(0.55 * Math.pow(1 - age, 1.5)).toFixed(3)})`;
+      ctx.lineWidth = 1.5 + 1.5 * (1 - age);
+      ctx.stroke();
+    }
+
+    // The slab: stacked navy layers for thickness, then a top face with a dashed edge.
+    const thick = plate * 0.07;
+    const lift = pulse * plate * 0.02;
+    for (let dy = thick; dy > 0; dy -= 2) {
+      iso(ctx, side, dy - lift);
+      ctx.fillStyle = `rgba(6, 30, 50, 1)`;
+      ctx.fill();
+    }
+    iso(ctx, side, -lift);
+    ctx.fillStyle = `rgba(${EMPA_NAVY}, ${(0.9 + 0.1 * pulse).toFixed(3)})`;
+    ctx.fill();
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = "rgba(206, 215, 221, 0.55)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Soft shadow of the gem on the slab, then the gem itself.
+    const u = plate * 0.3;
+    const bob = Math.sin(t / 900) * plate * 0.02 + pulse * plate * 0.05;
+    const gx = cx;
+    const gy = cy - plate * 0.3 - bob - lift;
+    ctx.fillStyle = `rgba(${EMPA_LIME}, ${(0.1 + 0.08 * pulse).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - lift, u * 0.9, u * 0.28, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const gs = 1 + 0.1 * pulse;
+    const at = (i: number): [number, number] => [gx + EMPA_GEM[i][0] * u * gs, gy + EMPA_GEM[i][1] * u * gs];
+    ctx.beginPath();
+    EMPA_GEM_OUTLINE.forEach((v, i) => {
+      const [x, y] = at(v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = `rgba(${EMPA_LIME}, ${(0.05 + 0.1 * treble + 0.06 * pulse).toFixed(3)})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(${EMPA_LIME}, ${(0.78 + 0.22 * pulse).toFixed(3)})`;
+    ctx.lineWidth = 1.3 + 1.2 * pulse;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const [a, b] of EMPA_GEM_EDGES) {
+      const [ax, ay] = at(a);
+      const [bx, by] = at(b);
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+    }
+    ctx.stroke();
+    ctx.fillStyle = `rgba(${EMPA_LIME}, 1)`;
+    for (let i = 0; i < EMPA_GEM.length; i++) {
+      const [x, y] = at(i);
+      ctx.fillRect(x - 2, y - 2, 4, 4);
+    }
+  };
+};
+
 const SCENES: Record<BackgroundId, Scene> = {
   sunset: sunsetScene,
   sunrise: sunriseScene,
   matrix: matrixScene,
   night: nightScene,
   kivo: kivoScene,
+  empa: empaScene,
   plain: plainScene,
 };
 
