@@ -1,16 +1,17 @@
 import { useEffect, useRef } from "react";
 import { colors, useLook, type BackgroundId } from "./theme";
-import { getBeat, setBeatSource } from "./beat";
+import { setBeatSource } from "./beat";
 import { reducedMotion } from "./ui";
 import { createDrive, type Drive } from "./audioDrive";
 import { readLevels } from "./tabAudio";
 
-// Re-exported so Station.tsx does not need to know the beat source lives in its own module.
+// Re-exported so Station.tsx does not need to know the beat source lives in its own module. The backdrop itself no longer
+// reads it; only the Visualizer bars do.
 export { setBeatSource };
 
 /**
- * The YouTube iframe exposes no audio data, so the backdrop cannot follow the music itself. This is a stable per-track
- * tempo (84-128 BPM, from the video id) counted on the station clock: every listener sees the same pulse at the same moment.
+ * The YouTube iframe exposes no audio data. This is a stable per-track tempo (84-128 BPM, from the video id) counted on the
+ * station clock, used for the synthetic Visualizer bars: every listener sees the same pulse at the same moment.
  */
 export function bpmFor(videoId: string): number {
   let h = 0;
@@ -34,11 +35,8 @@ const STARS = (() => {
   return Array.from({ length: 70 }, () => ({ x: rnd(), y: rnd() * 0.85, phase: rnd() * 6.28, size: rnd() < 0.15 ? 2 : 1 }));
 })();
 
-/** Kick-shaped envelope: full strength on the beat, fast decay. */
-const envelope = (beat: number | null): number => (beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5));
-
-/** The pulse a scene paints with: the real low end when tab audio is on, else the invented beat. */
-const pulseOf = (beat: number | null, audio: Drive | null): number => (audio ? audio.bass : envelope(beat));
+/** The pulse a scene paints with: the real low end when REAL EQ is on, otherwise nothing (the backdrop stays still). */
+const pulseOf = (audio: Drive | null): number => audio?.bass ?? 0;
 
 /** Stars and glints brighten with the real high end; 1 (no change) without tab audio. */
 const shimmerGain = (audio: Drive | null): number => 1 + 1.5 * (audio?.treble ?? 0);
@@ -47,16 +45,16 @@ const shimmerGain = (audio: Drive | null): number => 1 + 1.5 * (audio?.treble ??
  * A scene is built for one canvas size and returns its frame painter. State that lives across frames (the matrix columns)
  * belongs to the painter, so a resize starts it fresh.
  */
-type Painter = (ctx: CanvasRenderingContext2D, t: number, beat: number | null, audio: Drive | null) => void;
+type Painter = (ctx: CanvasRenderingContext2D, t: number, audio: Drive | null) => void;
 type Scene = (w: number, h: number) => Painter;
 
 const HORIZON = 0.64;
 const GRID_ROWS = 14;
 
-function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, beat: number | null, audio: Drive | null): void {
+function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, audio: Drive | null): void {
   const hy = h * HORIZON;
   const cx = w / 2;
-  const pulse = pulseOf(beat, audio);
+  const pulse = pulseOf(audio);
 
   const sky = ctx.createLinearGradient(0, 0, 0, hy);
   sky.addColorStop(0, "#08011c");
@@ -110,9 +108,9 @@ function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: num
   ctx.fillRect(0, hy, w, h - hy);
 
   const boost = 1 + 0.9 * pulse;
-  // Rows travel toward the viewer one row per four beats. One extra row is drawn past the bottom edge, so the row that
-  // wraps back in at the horizon (hidden under the horizon line) and the one leaving at the bottom never pop on screen.
-  const drift = beat === null ? (t / 9000) % 1 : (((beat / 4) % 1) + 1) % 1;
+  // Rows drift slowly toward the viewer. One extra row is drawn past the bottom edge, so the row that wraps back in at the
+  // horizon (hidden under the horizon line) and the one leaving at the bottom never pop on screen.
+  const drift = (t / 9000) % 1;
   ctx.lineWidth = 1.5;
   for (let i = 0; i <= GRID_ROWS; i++) {
     const z = (i + drift) / GRID_ROWS;
@@ -148,7 +146,7 @@ const GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄ0123
 const MATRIX_STEP_MS = 60;
 const MATRIX_SIZE = 16;
 
-/** Falling glyphs in the theme's accent colour; they brighten on the beat. */
+/** Falling glyphs in the theme's accent colour; they brighten with the bass when REAL EQ is on. */
 const matrixScene: Scene = (w, h) => {
   // Columns start off-screen so they rain in from the top. The first frame is the whole picture for reduced-motion users,
   // so it must already be populated: a static grid of glyphs, still drawn on the next advance for the animated case.
@@ -156,7 +154,7 @@ const matrixScene: Scene = (w, h) => {
   const drops = Array.from({ length: Math.ceil(w / MATRIX_SIZE) }, () => Math.random() * -50);
   let last = -Infinity;
   let primed = false;
-  return (ctx, t, beat, audio) => {
+  return (ctx, t, audio) => {
     const c = colors();
     if (!primed) {
       ctx.fillStyle = c.bg;
@@ -168,7 +166,7 @@ const matrixScene: Scene = (w, h) => {
     last = t;
     ctx.fillStyle = `rgba(${c.bgRgb}, 0.12)`;
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.7 + 0.3 * pulseOf(beat, audio)})`;
+    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.7 + 0.3 * pulseOf(audio)})`;
     ctx.font = `${MATRIX_SIZE}px ui-monospace, Menlo, monospace`;
     const rows = Math.ceil(h / MATRIX_SIZE) + 1;
     if (!seeded) {
@@ -186,9 +184,9 @@ const matrixScene: Scene = (w, h) => {
 };
 
 /** A starry sky with a moon, glowing in the theme's accent colour toward the horizon. */
-const nightScene: Scene = (w, h) => (ctx, t, beat, audio) => {
+const nightScene: Scene = (w, h) => (ctx, t, audio) => {
   const c = colors();
-  const pulse = pulseOf(beat, audio);
+  const pulse = pulseOf(audio);
   ctx.fillStyle = c.bg;
   ctx.fillRect(0, 0, w, h);
 
@@ -219,18 +217,18 @@ const nightScene: Scene = (w, h) => (ctx, t, beat, audio) => {
 };
 
 /** The theme's background colour with a faint glow at the top; the quietest option. */
-const plainScene: Scene = (w, h) => (ctx, _t, beat, audio) => {
+const plainScene: Scene = (w, h) => (ctx, _t, audio) => {
   const c = colors();
   ctx.fillStyle = c.bg;
   ctx.fillRect(0, 0, w, h);
   const glow = ctx.createRadialGradient(w / 2, 0, 0, w / 2, 0, Math.max(w, h) * 0.7);
-  glow.addColorStop(0, `rgba(${c.accentRgb}, ${0.12 + 0.1 * pulseOf(beat, audio)})`);
+  glow.addColorStop(0, `rgba(${c.accentRgb}, ${0.12 + 0.1 * pulseOf(audio)})`);
   glow.addColorStop(1, `rgba(${c.accentRgb}, 0)`);
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, w, h);
 };
 
-const sunsetScene: Scene = (w, h) => (ctx, t, beat, audio) => paintSunset(ctx, w, h, t, beat, audio);
+const sunsetScene: Scene = (w, h) => (ctx, t, audio) => paintSunset(ctx, w, h, t, audio);
 
 // Seeded cloud banks: fixed positions, so the sky looks the same on every load.
 const CLOUDS = (() => {
@@ -240,12 +238,12 @@ const CLOUDS = (() => {
 
 /**
  * Dawn: a deep-blue sky warming to gold at the horizon, a sun half above a calm sea, a shimmer path on the water, and
- * slow clouds. The sun and its glow swell on the beat. Painted on the page, never behind the panels' text.
+ * slow clouds. The sun and its glow swell with the bass when REAL EQ is on. Painted on the page, never behind the panels' text.
  */
-const sunriseScene: Scene = (w, h) => (ctx, t, beat, audio) => {
+const sunriseScene: Scene = (w, h) => (ctx, t, audio) => {
   const hy = h * 0.66;
   const cx = w / 2;
-  const pulse = pulseOf(beat, audio);
+  const pulse = pulseOf(audio);
 
   const sky = ctx.createLinearGradient(0, 0, 0, hy);
   sky.addColorStop(0, "#0a1a3f");
@@ -343,7 +341,7 @@ const SCENES: Record<BackgroundId, Scene> = {
   plain: plainScene,
 };
 
-/** The page backdrop. Static for reduced-motion users; otherwise animated, pulsing on the real spectrum when tab audio is on and on the beat otherwise. */
+/** The page backdrop. Static for reduced-motion users; otherwise it drifts, and pulses on the real spectrum only while REAL EQ is on. */
 export function Backdrop() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const { bg, theme } = useLook();
@@ -359,7 +357,7 @@ export function Backdrop() {
     let painter: Painter = () => {};
 
     const drive = createDrive();
-    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : getBeat(), calm ? null : drive(readLevels(), t));
+    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : drive(readLevels(), t));
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
