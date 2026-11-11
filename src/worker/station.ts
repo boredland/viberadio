@@ -5,7 +5,7 @@ import { extractVideoIds } from "../../shared/video";
 import { botTokenFor } from "./install";
 import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
-import { fetchVideoCategory, fetchVideoMeta, isNonMusic } from "./youtube";
+import { fetchVideoCategories, fetchVideoMeta, isNonMusic } from "./youtube";
 
 type StationState = {
   teamId: string;
@@ -513,13 +513,13 @@ export class Station extends DurableObject<Env> {
       }
       if (row.music === null && categoryLookups < MAX_CATEGORY_LOOKUPS_PER_PICK) {
         categoryLookups++;
-        const category = await fetchVideoCategory(row.video_id);
+        const category = (await fetchVideoCategories(this.env, [row.video_id])).get(row.video_id);
         if (isNonMusic(category)) {
           sql.exec("UPDATE library SET music=0, dead=1 WHERE video_id=?", row.video_id);
           continue;
         }
-        // Only a positive answer is remembered; null (unknown) is retried next time.
-        if (category !== null) sql.exec("UPDATE library SET music=1 WHERE video_id=?", row.video_id);
+        // Only a positive answer is remembered; no answer (no key, quota used up, a timeout) is retried next time.
+        if (category !== undefined) sql.exec("UPDATE library SET music=1 WHERE video_id=?", row.video_id);
       }
       // Every await above (the title lookup, the name lookup) lets other events run, and `current` is null while an advance
       // is in flight, so a removal in that window had nothing else to stop: it marks the row dead and this track would

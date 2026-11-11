@@ -5,3 +5,5 @@ SLACK_CLIENT_SECRET=
 # Your own workspace without OAuth: a bot token, used only for the workspace named below
 SLACK_BOT_TOKEN=
 SLACK_TEAM_ID=
+# Optional: with a YouTube Data API v3 key, only music is added (everything else is turned away). Empty = no filter.
+YOUTUBE_API_KEY=

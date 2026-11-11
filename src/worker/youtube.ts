@@ -15,60 +15,65 @@ export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null>
   }
 }
 
+/** The part of the Worker environment the category lookup reads. The URL override is for local testing only. */
+export type YouTubeEnv = { YOUTUBE_API_KEY?: string; YOUTUBE_API_URL?: string };
+
+export type VideoCategory = { id: string; name: string };
+
+/** videos.list takes at most 50 ids per call, and a call costs one quota unit whatever the id count. */
+const CATEGORY_BATCH = 50;
 /** Short, because this runs inside the add path and the track advance: a slow YouTube must delay neither for long. */
-const CATEGORY_TIMEOUT_MS = 3000;
+const CATEGORY_TIMEOUT_MS = 4000;
+const MUSIC_CATEGORY_ID = "10";
+
+/** YouTube's category ids (language independent, unlike the names). Only used to word a rejection. */
+const CATEGORY_NAMES: Record<string, string> = {
+  "1": "Film & Animation", "2": "Autos & Vehicles", "10": "Music", "15": "Pets & Animals", "17": "Sports",
+  "18": "Short Movies", "19": "Travel & Events", "20": "Gaming", "21": "Videoblogging", "22": "People & Blogs",
+  "23": "Comedy", "24": "Entertainment", "25": "News & Politics", "26": "Howto & Style", "27": "Education",
+  "28": "Science & Technology", "29": "Nonprofits & Activism", "30": "Movies", "31": "Anime/Animation",
+  "32": "Action/Adventure", "33": "Classics", "34": "Comedy", "35": "Documentary", "36": "Drama", "37": "Family",
+  "38": "Foreign", "39": "Horror", "40": "Sci-Fi/Fantasy", "41": "Thriller", "42": "Shorts", "43": "Shows", "44": "Trailers",
+};
 
 /**
- * The category the uploader gave a video ("Music", "Education", ...), from the same player endpoint the watch page calls.
- * That answer is about 10 KB, where the watch page is about 1.4 MB. It is not a documented API, so any failure (blocked
- * address, changed shape, timeout) is null and callers must treat null as "unknown", never as "not music".
+ * The category the uploader gave each video, from the official YouTube Data API (videos.list). Scraping the watch page or
+ * the player endpoint does not work from Cloudflare: YouTube answers those with 429 or "sign in to confirm you're not a
+ * bot". Only videos the API answered for are in the result, so an absent id means "unknown", never "not music": no key,
+ * an exhausted quota, a timeout and a private video all leave the map without that id, and the filter then lets it through.
  */
-export async function fetchVideoCategory(videoId: string): Promise<string | null> {
-  try {
-    const res = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: "https://www.youtube.com" },
-      body: JSON.stringify({
-        videoId,
-        // hl=en so the name is English: the check below compares names.
-        context: { client: { clientName: "WEB", clientVersion: "2.20250101.00.00", hl: "en" } },
-        contentCheckOk: true,
-        racyCheckOk: true,
-      }),
-      signal: AbortSignal.timeout(CATEGORY_TIMEOUT_MS),
-    });
-    if (res.status !== 200) return null;
-    const m = /"category":"((?:[^"\\]|\\.)+)"/.exec(await res.text());
-    return m ? m[1].replace(/\\u0026/g, "&") : null;
-  } catch {
-    return null;
+export async function fetchVideoCategories(env: YouTubeEnv, videoIds: string[]): Promise<Map<string, VideoCategory>> {
+  const out = new Map<string, VideoCategory>();
+  const key = env.YOUTUBE_API_KEY;
+  const unique = [...new Set(videoIds)];
+  if (!key || unique.length === 0) return out;
+  const base = env.YOUTUBE_API_URL ?? "https://www.googleapis.com/youtube/v3";
+  for (let i = 0; i < unique.length; i += CATEGORY_BATCH) {
+    const chunk = unique.slice(i, i + CATEGORY_BATCH);
+    try {
+      const res = await fetch(`${base}/videos?part=snippet&fields=items(id,snippet(categoryId))&id=${chunk.join(",")}&key=${encodeURIComponent(key)}`, {
+        signal: AbortSignal.timeout(CATEGORY_TIMEOUT_MS),
+      });
+      if (res.status !== 200) {
+        console.error("youtube categories", res.status);
+        continue;
+      }
+      const body = (await res.json()) as { items?: { id?: string; snippet?: { categoryId?: string } }[] };
+      for (const item of body.items ?? []) {
+        const id = item.id;
+        const cat = item.snippet?.categoryId;
+        if (id && cat) out.set(id, { id: cat, name: CATEGORY_NAMES[cat] ?? `category ${cat}` });
+      }
+    } catch (e) {
+      console.error("youtube categories", e);
+    }
   }
+  return out;
 }
 
-/** YouTube's fixed category names other than Music. */
-const NON_MUSIC_CATEGORIES = new Set([
-  "Film & Animation",
-  "Autos & Vehicles",
-  "Pets & Animals",
-  "Sports",
-  "Travel & Events",
-  "Gaming",
-  "People & Blogs",
-  "Comedy",
-  "Entertainment",
-  "News & Politics",
-  "Howto & Style",
-  "Education",
-  "Science & Technology",
-  "Nonprofits & Activism",
-]);
-
-/**
- * True only for a category that is certainly not music. A missing category, or a name not on the list (a localized one, or a
- * category YouTube adds later), is not enough to turn a link away, so the filter fails open.
- */
-export function isNonMusic(category: string | null): category is string {
-  return category !== null && NON_MUSIC_CATEGORIES.has(category);
+/** True only for a video the API said is in a category other than Music. Unknown (no entry) is not enough to turn it away. */
+export function isNonMusic(category: VideoCategory | undefined): category is VideoCategory {
+  return category !== undefined && category.id !== MUSIC_CATEGORY_ID;
 }
 
 export type PlaylistVideo = VideoMeta & { videoId: string };
