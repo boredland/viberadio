@@ -396,152 +396,176 @@ const sunriseScene: Scene = (w, h) => (ctx, t, audio) => {
   ctx.stroke();
 };
 
-/** The canvas scenes. Kivo is not one: it is DOM-based (KivoBackdrop), so Backdrop branches to it before painting here. */
-const SCENES: Record<Exclude<BackgroundId, "kivo">, Scene> = {
+/** Kivo brand colours (the product's own indigo, navy and ink). Fixed: this background is the brand, whatever theme is active. */
+const KIVO_NAVY = "#0B1130";
+const KIVO_INDIGO = "63, 76, 168";
+const KIVO_INDIGO_LIGHT = "112, 128, 214";
+const KIVO_INK = "238, 240, 244";
+
+/** The Kivo logo, one path per part, in an 80 x 82.58 box (from the product's favicon): K, V, the parentheses and two bars. */
+const LOGO_W = 80;
+const LOGO_H = 82.58;
+const LOGO_BAR_BASE = 33.548;
+const LOGO_PATHS = {
+  k: "M 2.581 33.548 L 2.581 0 L 7.97 0 L 7.97 15.563 L 20.828 0 L 27.448 0 L 13.605 16.448 L 28.387 33.548 L 21.544 33.548 L 7.97 17.892 L 7.97 33.548 L 2.581 33.548 Z",
+  v: "M 11.149 82.58 L 0 49.032 L 6.09 49.032 L 15.422 77.129 L 24.877 49.032 L 30.968 49.032 L 19.818 82.58 L 11.149 82.58 Z",
+  parenL:
+    "M 52.903 56.944 C 51.031 59.307 49.892 62.409 49.892 65.807 C 49.893 69.205 51.031 72.306 52.903 74.668 L 52.903 82.58 C 47.504 79.231 43.871 72.974 43.871 65.807 C 43.871 58.639 47.504 52.381 52.903 49.033 L 52.903 56.944 Z",
+  parenR:
+    "M 70.968 49.033 C 76.367 52.381 80 58.639 80 65.807 C 79.999 72.974 76.367 79.231 70.968 82.58 L 70.968 74.668 C 72.839 72.306 73.978 69.205 73.978 65.807 C 73.978 62.409 72.84 59.307 70.968 56.944 L 70.968 49.033 Z",
+  bar2: "M 64.516 1.648 C 66.369 1.372 68.11 0.805 69.677 0 L 69.677 33.548 L 64.516 33.548 L 64.516 1.648 Z",
+  bar1: "M 54.194 33.548 L 54.194 0 C 55.761 0.805 57.502 1.372 59.355 1.648 L 59.355 33.548 L 54.194 33.548 Z",
+};
+
+/**
+ * Kivo: a wall of rounded tiles (the shape of the app icon) with the logo on a plate in the middle.
+ *  - With REAL EQ on, the wall is a spectrum: the centre columns are the bass and the edges the treble, and each column
+ *    fills from the bottom with its band. The logo parts follow the music too: the parentheses open on the bass, the two
+ *    bars rise and fall like meters on the mids, and the K and V glow with the treble. A kick sends a rounded-square
+ *    shockwave outward from the logo.
+ *  - Without it the wall breathes in a slow diagonal wave and the logo rests, so the backdrop stays mute.
+ * Reduced motion paints one still frame of the resting state.
+ */
+const kivoScene: Scene = (w, h) => {
+  const paths = {
+    k: new Path2D(LOGO_PATHS.k),
+    v: new Path2D(LOGO_PATHS.v),
+    parenL: new Path2D(LOGO_PATHS.parenL),
+    parenR: new Path2D(LOGO_PATHS.parenR),
+    bar1: new Path2D(LOGO_PATHS.bar1),
+    bar2: new Path2D(LOGO_PATHS.bar2),
+  };
+  const size = Math.max(36, Math.min(64, w / 22));
+  const gap = Math.round(size * 0.14);
+  const step = size + gap;
+  const radius = size * 0.22;
+  const cols = Math.ceil(w / step) + 1;
+  const rows = Math.ceil(h / step) + 1;
+  const x0 = (w - (cols * step - gap)) / 2;
+  const y0 = (h - (rows * step - gap)) / 2;
+  const logoH = Math.min(w, h) * 0.3;
+  const plate = logoH * 1.3;
+  const rings: number[] = [];
+  let lastRing = -Infinity;
+  let prevBass = 0;
+
+  const tile = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
+    ctx.beginPath();
+    ctx.roundRect(x, y, size, size, radius);
+    ctx.fill();
+  };
+
+  return (ctx, t, audio) => {
+    const bands = audio?.bands.length ? audio.bands : null;
+    const pulse = audio ? Math.min(1, audio.bass / 0.4) : 0;
+
+    ctx.fillStyle = KIVO_NAVY;
+    ctx.fillRect(0, 0, w, h);
+    const glow = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.65);
+    glow.addColorStop(0, `rgba(${KIVO_INDIGO}, ${0.28 + 0.22 * pulse})`);
+    glow.addColorStop(1, `rgba(${KIVO_INDIGO}, 0)`);
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, w, h);
+
+    // The wall. Column distance from the middle picks the band, so the bass sits in the centre and the treble at the edges.
+    const mid = (cols - 1) / 2;
+    for (let c = 0; c < cols; c++) {
+      const x = x0 + c * step;
+      let lit = 0;
+      let level = 0;
+      if (bands) {
+        // 20 bands over the ~10 columns per side: each column takes the loudest band in its share, so no band is skipped
+        // (rounding one band per column silently dropped half of them, including the 8 kHz one).
+        const d = mid === 0 ? 0 : Math.abs(c - mid) / mid;
+        const lo = Math.min(bands.length - 1, Math.floor(d * (bands.length - 1)));
+        const hi = Math.min(bands.length - 1, Math.max(lo, Math.ceil(((Math.abs(c - mid) + 1) / mid) * (bands.length - 1)) - 1));
+        for (let b = lo; b <= hi; b++) level = Math.max(level, bands[b]);
+        lit = Math.round(level * rows * 0.9);
+      }
+      for (let r = 0; r < rows; r++) {
+        const k = rows - 1 - r;
+        const y = y0 + r * step;
+        if (k < lit) {
+          const top = k === lit - 1;
+          ctx.fillStyle = top ? `rgba(${KIVO_INK}, 0.3)` : `rgba(${KIVO_INDIGO_LIGHT}, ${0.12 + 0.2 * level})`;
+        } else {
+          const wave = 0.5 + 0.5 * Math.sin(t / 1500 + (c + r) * 0.33);
+          ctx.fillStyle = `rgba(${KIVO_INDIGO}, ${(bands ? 0.07 : 0.07 + 0.07 * wave).toFixed(3)})`;
+        }
+        tile(ctx, x, y);
+      }
+    }
+
+    // Shockwaves on a bass hit: thin rounded squares travelling outward from the logo plate.
+    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastRing > 220) {
+      rings.push(t);
+      lastRing = t;
+      if (rings.length > 6) rings.shift();
+    }
+    prevBass = audio?.bass ?? 0;
+    const reach = Math.max(w, h) * 0.75;
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const age = (t - rings[i]) / 1400;
+      if (age >= 1) {
+        rings.splice(i, 1);
+        continue;
+      }
+      const s = plate * (0.9 + (reach / plate) * age);
+      ctx.strokeStyle = `rgba(${KIVO_INDIGO_LIGHT}, ${(0.5 * Math.pow(1 - age, 1.6)).toFixed(3)})`;
+      ctx.lineWidth = 2 + 2 * (1 - age);
+      ctx.beginPath();
+      ctx.roundRect(w / 2 - s / 2, h / 2 - s / 2, s, s, s * 0.2);
+      ctx.stroke();
+    }
+
+    // Logo plate, like the app icon, then the six logo parts.
+    const ps = plate * (1 + 0.04 * pulse);
+    ctx.fillStyle = `rgba(${KIVO_INDIGO}, ${(0.62 + 0.2 * pulse).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.roundRect(w / 2 - ps / 2, h / 2 - ps / 2, ps, ps, ps * 0.22);
+    ctx.fill();
+
+    const sc = logoH / LOGO_H;
+    const level = (i: number) => (bands ? bands[Math.min(bands.length - 1, i)] : 0);
+    const part = (p: Path2D, l: number, tx = 0, sy = 1) => {
+      ctx.save();
+      ctx.translate(tx, 0);
+      if (sy !== 1) {
+        ctx.translate(0, LOGO_BAR_BASE);
+        ctx.scale(1, sy);
+        ctx.translate(0, -LOGO_BAR_BASE);
+      }
+      ctx.fillStyle = `rgba(${KIVO_INK}, ${(0.7 + 0.3 * l).toFixed(3)})`;
+      ctx.fill(p);
+      ctx.restore();
+    };
+    ctx.save();
+    ctx.translate(w / 2 - (LOGO_W / 2) * sc, h / 2 - (LOGO_H / 2) * sc);
+    ctx.scale(sc, sc);
+    const open = 9 * pulse;
+    part(paths.k, level(17));
+    part(paths.v, level(15));
+    part(paths.parenL, pulse, -open);
+    part(paths.parenR, pulse, open);
+    part(paths.bar1, level(8), 0, bands ? 0.45 + 0.55 * level(8) : 1);
+    part(paths.bar2, level(11), 0, bands ? 0.45 + 0.55 * level(11) : 1);
+    ctx.restore();
+  };
+};
+
+const SCENES: Record<BackgroundId, Scene> = {
   sunset: sunsetScene,
   sunrise: sunriseScene,
   matrix: matrixScene,
   night: nightScene,
+  kivo: kivoScene,
   plain: plainScene,
 };
-
-type KivoFrames = { frames: VideoFrame[]; durations: number[] };
-
-/**
- * Decodes the animated WebP into individual frames. Chrome can play an animated WebP in an <img>, but that cannot be paused
- * for reduced motion and it did not animate in my headless test browser, so the frames are driven explicitly instead.
- * Returns null where ImageDecoder is unavailable (Firefox, Safari): the caller then just shows the still frame.
- */
-async function decodeKivo(signal: AbortSignal): Promise<KivoFrames | null> {
-  if (!("ImageDecoder" in window)) return null;
-  const D = window.ImageDecoder;
-  const res = await fetch("/kivo-heart-morph.webp", { signal });
-  const data = await res.arrayBuffer();
-  const dec = new D({ data, type: "image/webp" });
-  try {
-    await dec.tracks.ready;
-    if (!dec.tracks.selectedTrack) return null;
-    const count = dec.tracks.selectedTrack.frameCount;
-    const frames: VideoFrame[] = [];
-    const durations: number[] = [];
-    for (let i = 0; i < count; i++) {
-      const { image } = await dec.decode({ frameIndex: i });
-      frames.push(image);
-      durations.push(image.duration ? image.duration / 1000 : 70);
-    }
-    return { frames, durations };
-  } finally {
-    dec.close();
-  }
-}
-/**
- * Kivo: the supplied morphing-heart loop drawn frame by frame (see decodeKivo) behind the panels, with a big centre tile
- * over a dimmed field. With REAL EQ on, the centre tile scales with the bass and the wash follows the treble; without it the
- * loop just plays, so the backdrop stays mute.
- *
- * Reduced motion: frame 13 (a heart) is held still and nothing animates. Where ImageDecoder is unavailable the same still
- * frame comes from kivo-heart-still.png.
- */
-function KivoBackdrop() {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const pulse = useRef<HTMLDivElement>(null);
-  const hue = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = canvas.current;
-    const ctx = el?.getContext("2d");
-    if (!el || !ctx) return;
-    const calm = reducedMotion();
-    const abort = new AbortController();
-    let raf = 0;
-    let disposed = false;
-    let frames: KivoFrames | null = null;
-    const still = new Image();
-    still.src = "/kivo-heart-still.png";
-    const drive = createDrive();
-
-    const draw = (t: number) => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      if (el.width !== Math.round(w * dpr) || el.height !== Math.round(h * dpr)) {
-        el.width = Math.round(w * dpr);
-        el.height = Math.round(h * dpr);
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-
-      let source: CanvasImageSource | null = null;
-      if (frames) {
-        const idx = calm ? 13 : Math.floor(t / 70) % frames.frames.length;
-        const f = frames.frames[idx];
-        if (f && f.displayWidth > 0) source = f;
-      } else if (still.complete && still.naturalWidth > 0) {
-        source = still;
-      }
-      if (!source) return;
-
-      const a = calm ? null : drive(readLevels(), t);
-      const bass = a?.bass ?? 0;
-      if (pulse.current) pulse.current.style.opacity = a ? String(0.06 + 0.2 * bass) : "0";
-      if (hue.current) hue.current.style.opacity = a ? String(0.03 + 0.09 * a.treble) : "0";
-
-      // Dimmed field of mirrored tiles, then the big centre tile that swells with the bass.
-      const cols = 4;
-      const rowsN = Math.max(1, Math.round((cols * h) / w));
-      const tw = w / cols;
-      const th = h / rowsN;
-      ctx.globalAlpha = 0.18;
-      for (let i = 0; i < cols; i++) {
-        for (let j = 0; j < rowsN; j++) {
-          ctx.drawImage(source, i * tw, j * th, tw, th);
-        }
-      }
-      ctx.globalAlpha = 0.35;
-      const size = Math.min(w, h) * 0.46 * (1 + 0.06 * bass);
-      ctx.drawImage(source, (w - size) / 2, (h - size) / 2, size, size);
-      ctx.globalAlpha = 1;
-    };
-
-    const frame = (t: number) => {
-      raf = requestAnimationFrame(frame);
-      draw(t);
-    };
-    if (!calm) raf = requestAnimationFrame(frame);
-    still.onload = () => draw(0);
-    draw(0);
-
-    void decodeKivo(abort.signal)
-      .then((f) => {
-        if (disposed || !f || f.frames.length === 0) return;
-        frames = f;
-        draw(0);
-      })
-      .catch(() => {
-        // Decoding failed: the still frame stays.
-      });
-
-    return () => {
-      disposed = true;
-      abort.abort();
-      cancelAnimationFrame(raf);
-      frames?.frames.forEach((f) => f.close());
-    };
-  }, []);
-
-  return (
-    <div className="backdrop kivo-scene" aria-hidden>
-      <canvas ref={canvas} className="kivo-canvas" />
-      <div ref={pulse} className="kivo-pulse" />
-      <div ref={hue} className="kivo-hue" />
-    </div>
-  );
-}
 
 /** The page backdrop. Static for reduced-motion users; otherwise it drifts, and pulses on the real spectrum only while REAL EQ is on. */
 export function Backdrop() {
   const { bg, theme } = useLook();
-  return bg === "kivo" ? <KivoBackdrop /> : <CanvasBackdrop bg={bg} theme={theme} />;
+  return <CanvasBackdrop bg={bg} theme={theme} />;
 }
 
 function CanvasBackdrop({ bg, theme }: { bg: BackgroundId; theme: string }) {
@@ -549,7 +573,6 @@ function CanvasBackdrop({ bg, theme }: { bg: BackgroundId; theme: string }) {
 
   // `theme` is a dependency because the scenes read the theme's colours when they paint: a new theme needs a new frame.
   useEffect(() => {
-    if (bg === "kivo") return;
     const el = canvas.current;
     const ctx = el?.getContext("2d");
     if (!el || !ctx) return;
