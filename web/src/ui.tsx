@@ -6,14 +6,55 @@ import { BARS, PAINTERS, loadViz, newVizState, nextViz, saveViz, vizLabel, type 
 
 export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+function loadFolded(key: string): boolean {
+  try {
+    return localStorage.getItem(`viberadio:fold:${key}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Without `fold` a window is a plain frame. With it the body can be hidden behind a button, and the choice is saved per device. */
+type Fold = {
+  /** Storage key, shared by every page that shows this window. */
+  key: string;
+  /** Noun in the button: "SHOW <label>" / "HIDE <label>". */
+  label: string;
+  /**
+   * Keep the content laid out (off-screen) while folded. The YouTube player must: a display:none iframe can be refused
+   * playback, and the IFrame API needs a viewport of at least 200x200.
+   */
+  keepLive?: boolean;
+};
+
 /** A Winamp-style window: striped title bar over a bevelled body. */
-export function Win({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
+export function Win({ title, children, className = "", fold }: { title: string; children: ReactNode; className?: string; fold?: Fold }) {
+  const [folded, setFolded] = useState(() => (fold ? loadFolded(fold.key) : false));
+  const toggle = () => {
+    if (!fold) return;
+    setFolded((f) => {
+      const next = !f;
+      try {
+        localStorage.setItem(`viberadio:fold:${fold.key}`, next ? "1" : "0");
+      } catch {
+        // storage unavailable: the fold still works for this visit
+      }
+      return next;
+    });
+  };
   return (
     <section className={`win ${className}`}>
       <div className="titlebar">
         <span>{title}</span>
       </div>
-      <div className="win-body">{children}</div>
+      <div className="win-body">
+        {fold && (
+          <button type="button" className="btn quiet" aria-expanded={!folded} onClick={toggle}>
+            {folded ? `▼ SHOW ${fold.label}` : `▲ HIDE ${fold.label}`}
+          </button>
+        )}
+        {fold ? <div className={folded ? (fold.keepLive ? "fold-away" : "fold-hidden") : undefined}>{children}</div> : children}
+      </div>
     </section>
   );
 }

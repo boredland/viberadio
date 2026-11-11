@@ -442,7 +442,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
         )}
       </Win>
 
-      <Win title="VIDEO" className={tuned ? "" : "collapsed"}>
+      <Win title="VIDEO" className={tuned ? "" : "collapsed"} fold={{ key: "video", label: "VIDEO", keepLive: true }}>
         <div className="player" ref={hostRef} />
       </Win>
       </div>
