@@ -11,6 +11,11 @@ export function setBeatSource(source: BeatSource | null): void {
   beatSource = source;
 }
 
+/** The current beat position (a float, fractional part = position within the beat), or null when nothing plays. */
+export function getBeat(): number | null {
+  return beatSource?.() ?? null;
+}
+
 /**
  * The YouTube iframe exposes no audio data, so the backdrop cannot follow the music itself. This is a stable per-track
  * tempo (84-128 BPM, from the video id) counted on the station clock: every listener sees the same pulse at the same moment.

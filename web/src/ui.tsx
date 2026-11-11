@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { colors } from "./theme";
+import { getBeat } from "./Backdrop";
 
 export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -50,8 +51,8 @@ export function Marquee({ text }: { text: string }) {
 const BARS = 20;
 
 /**
- * Decorative spectrum. The YouTube iframe exposes no audio data, so the bars are synthetic: they move while a track
- * is playing and fall to zero otherwise.
+ * Decorative spectrum. The YouTube iframe exposes no audio data, so the bars are synthetic: they pulse on the beat
+ * (station clock) and move randomly between beats. They fall to zero when nothing plays.
  */
 export function Visualizer({ active }: { active: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -79,7 +80,10 @@ export function Visualizer({ active }: { active: boolean }) {
       ctx.clearRect(0, 0, w, h);
       for (let i = 0; i < BARS; i++) {
         if (activeRef.current && !calm) {
-          if (Math.random() < 0.35) target[i] = Math.random() * (1 - (i / BARS) * 0.55);
+          const beat = getBeat();
+          const pulse = beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5);
+          const base = Math.random() < 0.35 ? Math.random() * (1 - (i / BARS) * 0.55) : target[i] * 0.92;
+          target[i] = Math.max(base, pulse * (1 - (i / BARS) * 0.3));
         } else {
           target[i] = 0;
         }
