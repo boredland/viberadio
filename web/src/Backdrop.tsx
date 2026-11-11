@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { colors, useLook, type BackgroundId } from "./theme";
 import { getBeat, setBeatSource } from "./beat";
 import { reducedMotion } from "./ui";
+import { createDrive, type Drive } from "./audioDrive";
+import { readLevels } from "./tabAudio";
 
 // Re-exported so Station.tsx does not need to know the beat source lives in its own module.
 export { setBeatSource };
@@ -35,20 +37,26 @@ const STARS = (() => {
 /** Kick-shaped envelope: full strength on the beat, fast decay. */
 const envelope = (beat: number | null): number => (beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5));
 
+/** The pulse a scene paints with: the real low end when tab audio is on, else the invented beat. */
+const pulseOf = (beat: number | null, audio: Drive | null): number => (audio ? audio.bass : envelope(beat));
+
+/** Stars and glints brighten with the real high end; 1 (no change) without tab audio. */
+const shimmerGain = (audio: Drive | null): number => 1 + 1.5 * (audio?.treble ?? 0);
+
 /**
  * A scene is built for one canvas size and returns its frame painter. State that lives across frames (the matrix columns)
  * belongs to the painter, so a resize starts it fresh.
  */
-type Painter = (ctx: CanvasRenderingContext2D, t: number, beat: number | null) => void;
+type Painter = (ctx: CanvasRenderingContext2D, t: number, beat: number | null, audio: Drive | null) => void;
 type Scene = (w: number, h: number) => Painter;
 
 const HORIZON = 0.64;
 const GRID_ROWS = 14;
 
-function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, beat: number | null): void {
+function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, beat: number | null, audio: Drive | null): void {
   const hy = h * HORIZON;
   const cx = w / 2;
-  const pulse = envelope(beat);
+  const pulse = pulseOf(beat, audio);
 
   const sky = ctx.createLinearGradient(0, 0, 0, hy);
   sky.addColorStop(0, "#08011c");
@@ -59,7 +67,7 @@ function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: num
   ctx.fillRect(0, 0, w, hy);
 
   for (const s of STARS) {
-    const a = (0.35 + 0.35 * Math.sin(t / 700 + s.phase)) * (1 - s.y / 0.85);
+    const a = (0.35 + 0.35 * Math.sin(t / 700 + s.phase)) * (1 - s.y / 0.85) * shimmerGain(audio);
     ctx.fillStyle = `rgba(255,255,255,${a})`;
     ctx.fillRect(s.x * w, s.y * hy, s.size, s.size);
   }
@@ -148,7 +156,7 @@ const matrixScene: Scene = (w, h) => {
   const drops = Array.from({ length: Math.ceil(w / MATRIX_SIZE) }, () => Math.random() * -50);
   let last = -Infinity;
   let primed = false;
-  return (ctx, t, beat) => {
+  return (ctx, t, beat, audio) => {
     const c = colors();
     if (!primed) {
       ctx.fillStyle = c.bg;
@@ -160,7 +168,7 @@ const matrixScene: Scene = (w, h) => {
     last = t;
     ctx.fillStyle = `rgba(${c.bgRgb}, 0.12)`;
     ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.7 + 0.3 * envelope(beat)})`;
+    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.7 + 0.3 * pulseOf(beat, audio)})`;
     ctx.font = `${MATRIX_SIZE}px ui-monospace, Menlo, monospace`;
     const rows = Math.ceil(h / MATRIX_SIZE) + 1;
     if (!seeded) {
@@ -178,9 +186,9 @@ const matrixScene: Scene = (w, h) => {
 };
 
 /** A starry sky with a moon, glowing in the theme's accent colour toward the horizon. */
-const nightScene: Scene = (w, h) => (ctx, t, beat) => {
+const nightScene: Scene = (w, h) => (ctx, t, beat, audio) => {
   const c = colors();
-  const pulse = envelope(beat);
+  const pulse = pulseOf(beat, audio);
   ctx.fillStyle = c.bg;
   ctx.fillRect(0, 0, w, h);
 
@@ -191,7 +199,7 @@ const nightScene: Scene = (w, h) => (ctx, t, beat) => {
   ctx.fillRect(0, h * 0.4, w, h * 0.6);
 
   for (const s of STARS) {
-    const a = 0.25 + 0.5 * (0.5 + 0.5 * Math.sin(t / 900 + s.phase));
+    const a = (0.25 + 0.5 * (0.5 + 0.5 * Math.sin(t / 900 + s.phase))) * shimmerGain(audio);
     ctx.fillStyle = `rgba(255,255,255,${a})`;
     ctx.fillRect(s.x * w, s.y * h, s.size, s.size);
   }
@@ -211,18 +219,18 @@ const nightScene: Scene = (w, h) => (ctx, t, beat) => {
 };
 
 /** The theme's background colour with a faint glow at the top; the quietest option. */
-const plainScene: Scene = (w, h) => (ctx, _t, beat) => {
+const plainScene: Scene = (w, h) => (ctx, _t, beat, audio) => {
   const c = colors();
   ctx.fillStyle = c.bg;
   ctx.fillRect(0, 0, w, h);
   const glow = ctx.createRadialGradient(w / 2, 0, 0, w / 2, 0, Math.max(w, h) * 0.7);
-  glow.addColorStop(0, `rgba(${c.accentRgb}, ${0.12 + 0.1 * envelope(beat)})`);
+  glow.addColorStop(0, `rgba(${c.accentRgb}, ${0.12 + 0.1 * pulseOf(beat, audio)})`);
   glow.addColorStop(1, `rgba(${c.accentRgb}, 0)`);
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, w, h);
 };
 
-const sunsetScene: Scene = (w, h) => (ctx, t, beat) => paintSunset(ctx, w, h, t, beat);
+const sunsetScene: Scene = (w, h) => (ctx, t, beat, audio) => paintSunset(ctx, w, h, t, beat, audio);
 
 // Seeded cloud banks: fixed positions, so the sky looks the same on every load.
 const CLOUDS = (() => {
@@ -234,10 +242,10 @@ const CLOUDS = (() => {
  * Dawn: a deep-blue sky warming to gold at the horizon, a sun half above a calm sea, a shimmer path on the water, and
  * slow clouds. The sun and its glow swell on the beat. Painted on the page, never behind the panels' text.
  */
-const sunriseScene: Scene = (w, h) => (ctx, t, beat) => {
+const sunriseScene: Scene = (w, h) => (ctx, t, beat, audio) => {
   const hy = h * 0.66;
   const cx = w / 2;
-  const pulse = envelope(beat);
+  const pulse = pulseOf(beat, audio);
 
   const sky = ctx.createLinearGradient(0, 0, 0, hy);
   sky.addColorStop(0, "#0a1a3f");
@@ -250,7 +258,7 @@ const sunriseScene: Scene = (w, h) => (ctx, t, beat) => {
 
   // Fading stars in the still-dark top of the sky.
   for (const s of STARS) {
-    const a = Math.max(0, 0.5 - s.y * 1.1) * (0.5 + 0.5 * Math.sin(t / 800 + s.phase));
+    const a = Math.max(0, 0.5 - s.y * 1.1) * (0.5 + 0.5 * Math.sin(t / 800 + s.phase)) * shimmerGain(audio);
     if (a <= 0.02) continue;
     ctx.fillStyle = `rgba(255,255,255,${a})`;
     ctx.fillRect(s.x * w, s.y * hy, s.size, s.size);
@@ -335,7 +343,7 @@ const SCENES: Record<BackgroundId, Scene> = {
   plain: plainScene,
 };
 
-/** The page backdrop. Static for reduced-motion users; otherwise animated, and pulsing while a beat source is set. */
+/** The page backdrop. Static for reduced-motion users; otherwise animated, pulsing on the real spectrum when tab audio is on and on the beat otherwise. */
 export function Backdrop() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const { bg, theme } = useLook();
@@ -350,7 +358,8 @@ export function Backdrop() {
     let h = 0;
     let painter: Painter = () => {};
 
-    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : (getBeat()));
+    const drive = createDrive();
+    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : getBeat(), calm ? null : drive(readLevels()));
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
