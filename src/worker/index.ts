@@ -184,7 +184,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
 
   // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
   const adder = { id: event.user ?? null, name: await resolveSlackName(env, teamId, event.user) };
-  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
+  const { accepted, alreadyQueued } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
   if (!accepted) return;
   const added = split.keep.length > 0 || pl.items.length > 0;
   const turnedAway = split.rejected.length > 0 || pl.summaries.some((p) => p.notMusic > 0);
@@ -198,6 +198,16 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
       botToken,
       channel,
       `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
+      threadTs,
+    );
+  }
+  for (const videoId of alreadyQueued) {
+    const title = split.keep.find((i) => i.videoId === videoId)?.title;
+    await slackChatPost(
+      env,
+      botToken,
+      channel,
+      `🔁 ${title ? `“${slackEscape(title)}”` : `https://youtu.be/${videoId}`} is already in the queue or playing, so it wasn't queued again`,
       threadTs,
     );
   }
@@ -327,9 +337,11 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   const eventId = `web-${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
   // The share target has no identity, so it is credited to the label "web share" instead of a person.
   const adder = { id: "web", name: WEB_ADDER };
-  const { accepted } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder, pl.items);
+  const { accepted, alreadyQueued } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder, pl.items);
+  const skipped = new Set(alreadyQueued);
   return json({
-    added: items.map((i) => ({ videoId: i.videoId, title: i.title })),
+    added: items.filter((i) => !skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
+    alreadyQueued: items.filter((i) => skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
     playlists: pl.summaries,
     playlistsFailed: pl.failed,
     unavailable,

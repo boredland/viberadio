@@ -169,30 +169,38 @@ export class Station extends DurableObject<Env> {
     adder: Adder = { id: null, name: null },
     /** Playlist videos: they join the shuffle without being queued. */
     libraryItems: EnqueueItem[] = [],
-  ): Promise<{ accepted: boolean }> {
+  ): Promise<{ accepted: boolean; alreadyQueued: string[] }> {
     await this.init(teamId, channelId);
     const s = this.st();
-    if (s.seenEventIds.includes(eventId)) return { accepted: false };
+    if (s.seenEventIds.includes(eventId)) return { accepted: false, alreadyQueued: [] };
     s.seenEventIds.push(eventId);
     if (s.seenEventIds.length > SEEN_CAP) s.seenEventIds.splice(0, s.seenEventIds.length - SEEN_CAP);
 
+    const alreadyQueued: string[] = [];
     for (const it of items) {
-      s.queue.push({
-        id: `${Date.now()}-${it.videoId}`,
-        videoId: it.videoId,
-        title: it.title,
-        author: it.author,
-        thumbnailUrl: it.thumbnailUrl,
-        source: "queue",
-        addedBy: adder.name,
-      });
+      // The library already holds one row per video, but the queue used to take a slot per post, so the same link showed
+      // up twice and (removal being by video) vanished twice. A video already waiting or playing is not queued again.
+      // It still goes through upsertLibrary, which revives a removed row and leaves the original poster alone.
+      if (s.current?.videoId === it.videoId || s.queue.some((q) => q.videoId === it.videoId)) {
+        alreadyQueued.push(it.videoId);
+      } else {
+        s.queue.push({
+          id: `${Date.now()}-${it.videoId}`,
+          videoId: it.videoId,
+          title: it.title,
+          author: it.author,
+          thumbnailUrl: it.thumbnailUrl,
+          source: "queue",
+          addedBy: adder.name,
+        });
+      }
       this.upsertLibrary(it, messageTs, adder);
     }
     for (const it of libraryItems) this.upsertLibrary(it, messageTs, adder);
     await this.persist();
     await this.maybeStart();
     this.broadcast();
-    return { accepted: true };
+    return { accepted: true, alreadyQueued };
   }
 
   /**

@@ -5,6 +5,7 @@ import { Win } from "./ui";
 
 type Result = {
   added: { videoId: string; title: string }[];
+  alreadyQueued?: { videoId: string; title: string }[];
   playlists?: { id: string; title: string; added: number; truncated: boolean }[];
   playlistsFailed?: string[];
   unavailable: string[];
@@ -85,12 +86,19 @@ export function Share() {
           </>
         ) : phase.kind === "done" ? (
           <>
-            <p className="lcd-text">★ ADDED TO RADIO</p>
+            <p className="lcd-text">
+              {phase.result.added.length === 0 && (phase.result.alreadyQueued?.length ?? 0) > 0 && !phase.result.playlists?.length
+                ? "ALREADY IN THE QUEUE"
+                : "★ ADDED TO RADIO"}
+            </p>
             <ul className="shared">
               {phase.result.added.map((a) => (
                 <li key={a.videoId}>{a.title}</li>
               ))}
             </ul>
+            {(phase.result.alreadyQueued?.length ?? 0) > 0 && (
+              <p className="dim">{phase.result.alreadyQueued!.length} already in the queue or playing, not queued again</p>
+            )}
             {phase.result.playlists?.map((p) => (
               <p key={p.id} className="dim">
                 {p.added} {p.added === 1 ? "video" : "videos"} from “{p.title}”
