@@ -66,6 +66,15 @@
   --x-fg: #f0b890; --x-bg: #1a0f0a; --x-border: #3a2012; --viz-mid: #ffe066; --viz-hi: #ff5a3c; --peak: #fff1d9;
 }
 
+/* Kivo: the periwinkle tile of kivo-heart-morph.webp, with the logo's cream white. The panel stays neutral dark so the
+   bevels read the same as in the other themes. */
+[data-theme="kivo"] {
+  --bg: #0b0d13; --lcd: #06080f; --accent: #8598d8; --accent-rgb: 133, 152, 216; --accent-dim: #b0bfe6;
+  --text: #e6ecfb; --hi: #ffffff; --list: #c3cff2; --muted: #93a3d0; --dim-text: #9aa6c4; --row: #1e2743;
+  --edge: #2a3350; --rule: #232b40; --led-off: #2a3350; --fill-start: #5568a8; --quiet-edge: #2a3040;
+  --x-fg: #e6ecfb; --x-bg: #151b2c; --x-border: #35406b; --viz-mid: #b0c4ff; --viz-hi: #ffb3c8; --peak: #e6ecfb;
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -102,6 +111,16 @@ body::after {
 }
 /* The rain only: its original strength was a veil at 22%, not the full-weight paint the other scenes use. */
 .backdrop[data-scene="matrix"] { opacity: 0.22; }
+
+/* Kivo: the supplied loop fills the screen as a field, with a big centre tile. The source frames have an opaque dark
+   background, so the tiles are dimmed to sit behind the panels. */
+.kivo-scene { overflow: hidden; background: var(--bg); }
+.kivo-tiles { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(4, 1fr); opacity: 0.18; filter: blur(1px); }
+.kivo-tiles img { width: 100%; height: 100%; object-fit: cover; }
+.kivo-big { position: absolute; inset: 0; display: grid; place-items: center; }
+.kivo-big img { width: min(46vw, 46vh); height: auto; opacity: 0.35; }
+.kivo-pulse { position: absolute; inset: 0; background: var(--accent); mix-blend-mode: screen; opacity: 0; }
+.kivo-hue { position: absolute; inset: 0; background: var(--viz-hi); mix-blend-mode: soft-light; opacity: 0; }
 
 #root { width: 100%; }
 

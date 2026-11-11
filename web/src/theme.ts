@@ -7,6 +7,7 @@ export const THEMES = [
   { id: "violet", label: "VIOLET", swatch: "#b388ff" },
   { id: "mono", label: "MONO", swatch: "#e8e8e8" },
   { id: "sunrise", label: "SUNRISE", swatch: "#ff9f3c" },
+  { id: "kivo", label: "KIVO", swatch: "#8598d8" },
 ] as const;
 
 export const BACKGROUNDS = [
@@ -14,6 +15,7 @@ export const BACKGROUNDS = [
   { id: "sunrise", label: "SUNRISE" },
   { id: "matrix", label: "MATRIX" },
   { id: "night", label: "NIGHT" },
+  { id: "kivo", label: "KIVO" },
   { id: "plain", label: "PLAIN" },
 ] as const;
 

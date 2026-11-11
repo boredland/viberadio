@@ -13,6 +13,7 @@ const PUBLIC_SHELL = [
   "/icon-192.png",
   "/icon-512.png",
   "/icon-maskable-512.png",
+  "/kivo-heart-morph.webp",
 ];
 
 /** Emits dist/sw.js with the hashed bundle files baked into its precache list. */
