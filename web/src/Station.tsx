@@ -384,9 +384,16 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                         : "Keep the screen on so the player keeps playing. Uses more battery."
                     }
                   >
-                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                      <circle cx="8" cy="8" r="2.8" />
-                      <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" />
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M2.5 8.5h4l-4 4.5h4" />
+                      <path d="M8.5 3.5h3.5l-3.5 4h3.5" />
+                      <path d="M12.5 1.2h2l-2 2.3h2" />
+                      {keepAwake.wanted && (
+                        <>
+                          <path d="M2 14 14 2" stroke="var(--lcd)" strokeWidth="2.6" />
+                          <path d="M2 14 14 2" strokeWidth="1.3" />
+                        </>
+                      )}
                     </svg>
                   </button>
                 )}
