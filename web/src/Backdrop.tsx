@@ -147,6 +147,9 @@ const MATRIX_SIZE = 16;
 
 /** Falling glyphs in the theme's accent colour; they brighten on the beat. */
 const matrixScene: Scene = (w, h) => {
+  // Columns start off-screen so they rain in from the top. The first frame is the whole picture for reduced-motion users,
+  // so it must already be populated: a static grid of glyphs, still drawn on the next advance for the animated case.
+  let seeded = false;
   const drops = Array.from({ length: Math.ceil(w / MATRIX_SIZE) }, () => Math.random() * -50);
   let last = -Infinity;
   let primed = false;
@@ -164,6 +167,13 @@ const matrixScene: Scene = (w, h) => {
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = `rgba(${c.accentRgb}, ${0.45 + 0.45 * envelope(beat)})`;
     ctx.font = `${MATRIX_SIZE}px ui-monospace, Menlo, monospace`;
+    const rows = Math.ceil(h / MATRIX_SIZE) + 1;
+    if (!seeded) {
+      for (let i = 0; i < drops.length; i++) {
+        for (let j = 0; j < rows; j++) ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * MATRIX_SIZE, j * MATRIX_SIZE);
+      }
+      seeded = true;
+    }
     for (let i = 0; i < drops.length; i++) {
       ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * MATRIX_SIZE, drops[i] * MATRIX_SIZE);
       if (drops[i] * MATRIX_SIZE > h && Math.random() > 0.975) drops[i] = 0;
@@ -270,5 +280,5 @@ export function Backdrop() {
     };
   }, [bg, theme]);
 
-  return <canvas className="backdrop" ref={canvas} aria-hidden />;
+  return <canvas className="backdrop" data-scene={bg} ref={canvas} aria-hidden />;
 }

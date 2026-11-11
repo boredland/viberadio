@@ -6,8 +6,9 @@
   /* Warning colours are not themed: amber means "attention" and red means "error" in every theme. */
   --amber: #ff9f1c;
   --red: #ff4d4d;
-  /* Themed tokens below are the phosphor (default) set. Small-text ones (--accent-dim, --dim-text, --muted) are >= 4.5:1 on
-     --panel, black and the current playlist row in every theme (checked), so a theme cannot make the list unreadable. */
+  /* Themed tokens below are the phosphor (default) set. The pairs that are actually rendered are >= 4.5:1 in every theme:
+     --accent-dim on --panel and on --row, --list and --muted on black, --text on --row and on --lcd. Not every token pair
+     is safe: --muted and --dim-text fall below 4.5:1 on --row, so new rules must check the pair they use. */
   --lcd: #000a04;
   --accent: #00ff66;
   --accent-rgb: 0, 255, 102;
@@ -93,6 +94,8 @@ body::after {
   z-index: 0;
   pointer-events: none;
 }
+/* The rain only: its original strength was a veil at 22%, not the full-weight paint the other scenes use. */
+.backdrop[data-scene="matrix"] { opacity: 0.22; }
 
 #root { width: 100%; }
 
