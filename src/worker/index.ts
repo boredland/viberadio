@@ -338,7 +338,8 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   // The share target has no identity, so it is credited to the label "web share" instead of a person.
   const adder = { id: "web", name: WEB_ADDER };
   const { accepted, alreadyQueued } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder, pl.items);
-  const skipped = new Set(alreadyQueued);
+  // A rejected (re-delivered) request means these same links were just queued by the first copy, so nothing is new.
+  const skipped = accepted ? new Set(alreadyQueued) : new Set(items.map((i) => i.videoId));
   return json({
     added: items.filter((i) => !skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
     alreadyQueued: items.filter((i) => skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),

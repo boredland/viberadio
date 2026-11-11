@@ -930,6 +930,26 @@ const snowScene: Scene = (w, h) => {
   let lastAuroraT = -1;
   let auroraPulse = 0;
 
+  // Where the moon can be seen on a portrait screen: the middle of the widest stretch no pine covers. Each pine hides
+  // its widest tier (0.3 of its height to each side), so that is the span to keep clear, measured at this screen size.
+  const moonX = (() => {
+    const spans = PINES.map((p) => {
+      const half = h * p.height * (p.layer === 0 ? 1 : 1.4) * 0.3;
+      return [p.x * w - half, p.x * w + half] as const;
+    }).sort((a, b) => a[0] - b[0]);
+    let best = w * 0.5;
+    let widest = 0;
+    let edge = 0;
+    for (const [from, to] of [...spans, [w, w] as const]) {
+      if (from - edge > widest) {
+        widest = from - edge;
+        best = (from + edge) / 2;
+      }
+      edge = Math.max(edge, to);
+    }
+    return best;
+  })();
+
   const pine = (ctx: CanvasRenderingContext2D, x: number, base: number, th: number, alpha: number, shiver: number) => {
     ctx.fillStyle = `rgba(8, 18, 32, ${alpha})`;
     ctx.fillRect(x - th * 0.035, base - th * 0.14, th * 0.07, th * 0.14);
@@ -1004,10 +1024,13 @@ const snowScene: Scene = (w, h) => {
     }
 
     // Moon with a halo.
-    // Placed low and left of centre: the panels cover the top of the page, so a moon up there is hidden behind them.
-    const mx = w * 0.12;
-    const my = hy * 0.62;
+    // The panels cover the top of the page. Wide screens have room low-left of centre. On a portrait screen the panels
+    // reach almost down to the horizon and the pines are drawn over the moon, so it rises on the ridge in the widest gap
+    // between pines (see moonX), the only place left where it can be seen.
+    const portrait = w < h;
     const mr = Math.min(w, h) * 0.045;
+    const mx = portrait ? moonX : w * 0.12;
+    const my = portrait ? hy - h * 0.03 - mr * 0.4 : hy * 0.62;
     const halo = ctx.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
     halo.addColorStop(0, `rgba(${SNOW_ICE}, ${(0.28 + 0.12 * pulse).toFixed(3)})`);
     halo.addColorStop(1, `rgba(${SNOW_ICE}, 0)`);
