@@ -224,8 +224,110 @@ const plainScene: Scene = (w, h) => (ctx, _t, beat) => {
 
 const sunsetScene: Scene = (w, h) => (ctx, t, beat) => paintSunset(ctx, w, h, t, beat);
 
+// Seeded cloud banks: fixed positions, so the sky looks the same on every load.
+const CLOUDS = (() => {
+  const rnd = seeded(7);
+  return Array.from({ length: 9 }, () => ({ x: rnd(), y: 0.12 + rnd() * 0.4, w: 0.18 + rnd() * 0.22, speed: 0.4 + rnd() * 0.8 }));
+})();
+
+/**
+ * Dawn: a deep-blue sky warming to gold at the horizon, a sun half above a calm sea, a shimmer path on the water, and
+ * slow clouds. The sun and its glow swell on the beat. Painted on the page, never behind the panels' text.
+ */
+const sunriseScene: Scene = (w, h) => (ctx, t, beat) => {
+  const hy = h * 0.66;
+  const cx = w / 2;
+  const pulse = envelope(beat);
+
+  const sky = ctx.createLinearGradient(0, 0, 0, hy);
+  sky.addColorStop(0, "#0a1a3f");
+  sky.addColorStop(0.4, "#4a3a7a");
+  sky.addColorStop(0.7, "#e0708a");
+  sky.addColorStop(0.88, "#ffa65c");
+  sky.addColorStop(1, "#ffd98a");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, hy);
+
+  // Fading stars in the still-dark top of the sky.
+  for (const s of STARS) {
+    const a = Math.max(0, 0.5 - s.y * 1.1) * (0.5 + 0.5 * Math.sin(t / 800 + s.phase));
+    if (a <= 0.02) continue;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.fillRect(s.x * w, s.y * hy, s.size, s.size);
+  }
+
+  const r = Math.min(w * 0.2, hy * 0.2) * (1 + 0.04 * pulse);
+  const sunY = hy - r * 0.15;
+
+  const glow = ctx.createRadialGradient(cx, sunY, r * 0.4, cx, sunY, r * 4.2);
+  glow.addColorStop(0, `rgba(255,214,120,${0.55 + 0.3 * pulse})`);
+  glow.addColorStop(1, "rgba(255,160,80,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, hy);
+
+  // Clouds drift slowly and catch the light underneath.
+  for (const c of CLOUDS) {
+    const x = (((c.x * w + (t / 1000) * 6 * c.speed) % (w * 1.4)) - w * 0.2);
+    const cw = c.w * w;
+    const cy = c.y * hy;
+    const warm = Math.min(1, c.y * 1.6 + 0.2);
+    const cg = ctx.createLinearGradient(0, cy - 8, 0, cy + 10);
+    cg.addColorStop(0, `rgba(255,200,170,${0.16 * warm})`);
+    cg.addColorStop(1, `rgba(255,130,100,${0.34 * warm})`);
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.ellipse(x + cw / 2, cy, cw / 2, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // The sun: only the part above the horizon.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, w, hy);
+  ctx.clip();
+  const body = ctx.createRadialGradient(cx, sunY, 0, cx, sunY, r);
+  body.addColorStop(0, "#fffbe6");
+  body.addColorStop(0.6, "#ffe38a");
+  body.addColorStop(1, "#ffb347");
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.arc(cx, sunY, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Calm sea, lightest at the horizon.
+  const sea = ctx.createLinearGradient(0, hy, 0, h);
+  sea.addColorStop(0, "#d98660");
+  sea.addColorStop(0.15, "#8a4a68");
+  sea.addColorStop(1, "#160a1c");
+  ctx.fillStyle = sea;
+  ctx.fillRect(0, hy, w, h - hy);
+
+  // Shimmer path: short horizontal glints under the sun that widen toward the viewer and flicker.
+  const rows = 26;
+  for (let i = 0; i < rows; i++) {
+    const z = (i + 1) / rows;
+    const y = hy + (h - hy) * z * z;
+    const spread = r * (0.5 + 2.4 * z);
+    const wob = Math.sin(t / 600 + i * 1.7) * spread * 0.18;
+    const a = (0.55 - 0.4 * z) * (0.55 + 0.45 * Math.sin(t / 340 + i * 2.3)) * (1 + 0.5 * pulse);
+    if (a <= 0.02) continue;
+    ctx.fillStyle = `rgba(255,230,170,${Math.min(0.9, a)})`;
+    const lw = spread * (0.5 + 0.5 * Math.abs(Math.sin(i * 12.9898)));
+    ctx.fillRect(cx - lw / 2 + wob, y, lw, 1.5 + 2 * z);
+  }
+
+  ctx.strokeStyle = `rgba(255,214,150,${0.6 + 0.3 * pulse})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, hy);
+  ctx.lineTo(w, hy);
+  ctx.stroke();
+};
+
 const SCENES: Record<BackgroundId, Scene> = {
   sunset: sunsetScene,
+  sunrise: sunriseScene,
   matrix: matrixScene,
   night: nightScene,
   plain: plainScene,

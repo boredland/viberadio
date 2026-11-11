@@ -6,10 +6,12 @@ export const THEMES = [
   { id: "hotpink", label: "HOT PINK", swatch: "#ff4fd8" },
   { id: "violet", label: "VIOLET", swatch: "#b388ff" },
   { id: "mono", label: "MONO", swatch: "#e8e8e8" },
+  { id: "sunrise", label: "SUNRISE", swatch: "#ff9f3c" },
 ] as const;
 
 export const BACKGROUNDS = [
   { id: "sunset", label: "SUNSET" },
+  { id: "sunrise", label: "SUNRISE" },
   { id: "matrix", label: "MATRIX" },
   { id: "night", label: "NIGHT" },
   { id: "plain", label: "PLAIN" },
@@ -25,6 +27,10 @@ const DEFAULT_LOOK: Look = { theme: "phosphor", bg: "sunset" };
 
 /** Top of the sunset sky: also the browser chrome colour while that background is shown. */
 export const SUNSET_SKY_TOP = "#08011c";
+/** Same for the sunrise sky. */
+export const SUNRISE_SKY_TOP = "#0a1a3f";
+
+const SKY_TOP: Record<string, string> = { sunset: SUNSET_SKY_TOP, sunrise: SUNRISE_SKY_TOP };
 
 /** Anything not in the list (an old build's value, a hand-edited one) falls back instead of reaching the DOM. */
 function pick<T extends string>(raw: string | null, items: readonly { id: T }[], fallback: T): T {
@@ -59,7 +65,7 @@ function apply(l: Look): void {
   root.dataset.theme = l.theme;
   root.dataset.bg = l.bg;
   const bg = getComputedStyle(root).getPropertyValue("--bg").trim();
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", l.bg === "sunset" ? SUNSET_SKY_TOP : bg);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", SKY_TOP[l.bg] ?? bg);
 }
 
 function update(next: Look): void {

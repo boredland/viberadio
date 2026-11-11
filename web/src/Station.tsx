@@ -8,6 +8,7 @@ import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
 import { bpmFor, setBeatSource } from "./Backdrop";
+import { startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
 import { Look } from "./Look";
 
 const DRIFT_TICK_MS = 5000;
@@ -53,6 +54,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
   const volumeRef = useRef(volume);
   volumeRef.current = volume;
   const keepAwake = useKeepAwake(tuned);
+  const tabAudio = useTabAudio();
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +81,9 @@ export function Station({ token, online }: { token: string; online: boolean }) {
       cancelled = true;
     };
   }, [token, attempt]);
+
+  // Leaving the page must end the share: otherwise Chrome's "sharing this tab" bar and the analyser outlive the station.
+  useEffect(() => stopTabAudio, []);
 
   // Retry once when connectivity returns. Keyed on `online` alone: keying on loadFailed too would retry in a tight loop
   // against a server that is reachable but failing.
@@ -401,6 +406,18 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                 {keepAwake.wanted ? (keepAwake.active ? "SCREEN ON ✓" : "SCREEN ON …") : "KEEP SCREEN ON"}
               </button>
             )}
+            {tabAudioSupported() && (
+              <button
+                className="btn quiet"
+                onClick={tabAudio.status === "on" ? stopTabAudio : () => void startTabAudio()}
+                aria-pressed={tabAudio.status === "on"}
+                disabled={tabAudio.status === "starting"}
+                title="Make the equalizer follow the real sound. Your browser will ask you to share this tab with its audio. Nothing is recorded or sent. Desktop Chrome or Edge only."
+              >
+                {tabAudio.status === "on" ? "REAL EQ ✓" : tabAudio.status === "starting" ? "REAL EQ …" : "REAL EQ"}
+              </button>
+            )}
+            {tabAudio.status === "failed" && <p className="dim">{tabAudioMessage(tabAudio.reason)}</p>}
           </div>
         )}
       </Win>

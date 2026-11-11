@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { colors } from "./theme";
 import { getBeat } from "./beat";
+import { readLevels } from "./tabAudio";
 
 export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -78,12 +79,18 @@ export function Visualizer({ active }: { active: boolean }) {
       const h = el.height;
       const bw = w / BARS;
       ctx.clearRect(0, 0, w, h);
+      // One read per frame, shared by every bar.
+      const real = activeRef.current && !calm ? readLevels() : null;
       for (let i = 0; i < BARS; i++) {
         if (activeRef.current && !calm) {
-          const beat = getBeat();
-          const pulse = beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5);
-          const base = Math.random() < 0.35 ? Math.random() * (1 - (i / BARS) * 0.55) : target[i] * 0.92;
-          target[i] = Math.max(base, pulse * (1 - (i / BARS) * 0.3));
+          if (real) {
+            target[i] = real[i];
+          } else {
+            const beat = getBeat();
+            const pulse = beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5);
+            const base = Math.random() < 0.35 ? Math.random() * (1 - (i / BARS) * 0.55) : target[i] * 0.92;
+            target[i] = Math.max(base, pulse * (1 - (i / BARS) * 0.3));
+          }
         } else {
           target[i] = 0;
         }

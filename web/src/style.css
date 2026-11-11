@@ -59,6 +59,12 @@
   --edge: #3a3a3a; --rule: #2a2a2a; --led-off: #3a3a3a; --fill-start: #8a8a8a; --quiet-edge: #2a2a2a;
   --x-fg: #cfcfcf; --x-bg: #161616; --x-border: #3a3a3a; --viz-mid: #ffffff; --viz-hi: #ff8a1f; --peak: #ffffff;
 }
+[data-theme="sunrise"] {
+  --bg: #160a05; --lcd: #0a0401; --accent: #ff9f3c; --accent-rgb: 255, 159, 60; --accent-dim: #d97f2a;
+  --text: #ffd9b8; --hi: #fff3e6; --list: #ffb47a; --muted: #c98a58; --dim-text: #c99a78; --row: #3a1a08;
+  --edge: #4a2410; --rule: #3a1c0c; --led-off: #3a2214; --fill-start: #b8561a; --quiet-edge: #2e1c12;
+  --x-fg: #f0b890; --x-bg: #1a0f0a; --x-border: #3a2012; --viz-mid: #ffe066; --viz-hi: #ff5a3c; --peak: #fff1d9;
+}
 
 * { box-sizing: border-box; }
 
