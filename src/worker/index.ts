@@ -53,6 +53,8 @@ async function readVerified(request: Request, env: Env): Promise<string | null> 
 
 /** Emoji name (no colons) added to a message once at least one of its links is in the rotation. */
 const ACK_REACTION = "headphones";
+/** Added instead of the headphones when nothing in a message could be added because none of it is music. */
+const REJECT_REACTION = "x";
 
 async function announce(env: Env, botToken: string, origin: string, channel: string, token: string): Promise<void> {
   await slackChatPost(
@@ -184,7 +186,12 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   const adder = { id: event.user ?? null, name: await resolveSlackName(env, teamId, event.user) };
   const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
   if (!accepted) return;
-  if (split.keep.length > 0 || pl.items.length > 0) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
+  const added = split.keep.length > 0 || pl.items.length > 0;
+  const turnedAway = split.rejected.length > 0 || pl.summaries.some((p) => p.notMusic > 0);
+  // A mixed message gets the headphones (its music is in) and a reply naming what was skipped; only a message with no
+  // music at all gets the cross. A message that failed for another reason (unavailable video) gets neither, as before.
+  if (added) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
+  else if (turnedAway) await slackReact(env, botToken, channel, event.ts, REJECT_REACTION);
   for (const videoId of unavailable) {
     await slackChatPost(
       env,
