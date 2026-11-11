@@ -212,6 +212,8 @@ body::after {
 }
 
 .viz { width: 120px; height: 38px; flex: none; image-rendering: pixelated; }
+.viz-btn { flex: none; padding: 0; margin: 0; border: 0; background: none; cursor: pointer; line-height: 0; }
+.viz-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .marquee {
   position: relative;

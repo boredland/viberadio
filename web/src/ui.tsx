@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { colors } from "./theme";
 import { getBeat } from "./beat";
 import { readLevels } from "./tabAudio";
+import { BARS, PAINTERS, loadViz, newVizState, nextViz, saveViz, vizLabel, type VizId } from "./viz";
 
 export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -49,25 +50,28 @@ export function Marquee({ text }: { text: string }) {
   );
 }
 
-const BARS = 20;
-
 /**
- * Decorative spectrum. The YouTube iframe exposes no audio data, so the bars are synthetic: they pulse on the beat
- * (station clock) and move randomly between beats. They fall to zero when nothing plays.
+ * Decorative spectrum with five displays; clicking cycles them and the choice is saved. Without REAL EQ the YouTube iframe
+ * exposes no audio, so the levels are synthetic: they pulse on the beat (station clock) and move randomly between beats.
+ * They fall to zero when nothing plays.
  */
 export function Visualizer({ active }: { active: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  const [mode, setMode] = useState<VizId>(loadViz);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  /** rAF timestamp until which the mode name is drawn over the display. */
+  const flashUntil = useRef(0);
 
   useEffect(() => {
     const el = canvas.current;
     const ctx = el?.getContext("2d");
     if (!el || !ctx) return;
     const calm = reducedMotion();
-    const level = new Array<number>(BARS).fill(0);
+    const s = newVizState();
     const target = new Array<number>(BARS).fill(0);
-    const peak = new Array<number>(BARS).fill(0);
     let raf = 0;
     let last = 0;
 
@@ -77,9 +81,8 @@ export function Visualizer({ active }: { active: boolean }) {
       last = t;
       const w = el.width;
       const h = el.height;
-      const bw = w / BARS;
       ctx.clearRect(0, 0, w, h);
-      // One read per frame, shared by every bar.
+      // One read per frame, shared by every display.
       const real = activeRef.current && !calm ? readLevels() : null;
       for (let i = 0; i < BARS; i++) {
         if (activeRef.current && !calm) {
@@ -95,24 +98,49 @@ export function Visualizer({ active }: { active: boolean }) {
           target[i] = 0;
         }
         // Snap up on a rise, fall back more slowly: a kick should land when it is heard, not a few frames later.
-        level[i] += (target[i] - level[i]) * (target[i] > level[i] ? 0.85 : 0.4);
-        peak[i] = Math.max(level[i], peak[i] - 0.03);
-        const segs = Math.round(level[i] * 10);
-        for (let s = 0; s < segs; s++) {
-          const c = colors();
-          ctx.fillStyle = s < 6 ? c.accent : s < 8 ? c.vizMid : c.vizHi;
-          ctx.fillRect(i * bw + 1, h - (s + 1) * (h / 10) + 1, bw - 2, h / 10 - 1);
-        }
-        const p = Math.round(peak[i] * 10);
-        if (p > 0) {
-          ctx.fillStyle = colors().peak;
-          ctx.fillRect(i * bw + 1, h - p * (h / 10), bw - 2, 2);
-        }
+        s.level[i] += (target[i] - s.level[i]) * (target[i] > s.level[i] ? 0.85 : 0.4);
+        s.peak[i] = Math.max(s.level[i], s.peak[i] - 0.03);
+      }
+      s.head = (s.head + 1) % s.history.length;
+      for (let i = 0; i < BARS; i++) s.history[s.head][i] = s.level[i];
+      PAINTERS[modeRef.current](ctx, w, h, s);
+
+      if (t < flashUntil.current) {
+        const label = vizLabel(modeRef.current);
+        ctx.font = "bold 15px ui-monospace, Menlo, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const c = colors();
+        const tw = ctx.measureText(label).width + 12;
+        ctx.fillStyle = `rgba(${c.bgRgb}, 0.82)`;
+        ctx.fillRect((w - tw) / 2, h / 2 - 11, tw, 22);
+        ctx.fillStyle = c.accent;
+        ctx.fillText(label, w / 2, h / 2 + 1);
       }
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return <canvas className="viz" ref={canvas} width={160} height={50} aria-hidden />;
+  const cycle = () => {
+    // The updater form advances from the latest state, so two clicks before a re-render still move two modes.
+    setMode((m) => {
+      const next = nextViz(m);
+      saveViz(next);
+      return next;
+    });
+    flashUntil.current = performance.now() + 1100;
+  };
+
+  return (
+    <button
+      type="button"
+      className="viz-btn"
+      onClick={cycle}
+      aria-label={`Display: ${vizLabel(mode)}. Press to change`}
+      title={`${vizLabel(mode)} (click to change)`}
+    >
+      <canvas className="viz" ref={canvas} width={160} height={50} aria-hidden />
+    </button>
+  );
 }
