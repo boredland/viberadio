@@ -366,6 +366,54 @@ export function Station({ token, online }: { token: string; online: boolean }) {
             <span>{pad3(snap?.librarySize ?? 0)} TRK</span>
             <span>{duration > 0 ? fmtLcd(duration * 1000) : "--:--"} LEN</span>
             {now?.addedBy && <span className="by-lcd">ADDED BY {now.addedBy.toUpperCase()}</span>}
+            {tuned && (keepAwake.supported || tabAudioSupported()) && (
+              <span className="lcd-tools">
+                {keepAwake.supported && (
+                  <button
+                    type="button"
+                    className="lcd-tool"
+                    onClick={keepAwake.toggle}
+                    aria-pressed={keepAwake.wanted}
+                    aria-busy={keepAwake.wanted && !keepAwake.active}
+                    aria-label={`Keep screen on${keepAwake.wanted && !keepAwake.active ? " (waiting for the browser)" : ""}`}
+                    title={
+                      keepAwake.wanted
+                        ? keepAwake.active
+                          ? "Screen stays on. Click to turn off."
+                          : "Screen stay-on requested, waiting for the browser."
+                        : "Keep the screen on so the player keeps playing. Uses more battery."
+                    }
+                  >
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                      <circle cx="8" cy="8" r="2.8" />
+                      <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" />
+                    </svg>
+                  </button>
+                )}
+                {tabAudioSupported() && (
+                  <button
+                    type="button"
+                    className="lcd-tool"
+                    onClick={tabAudio.status === "on" ? turnOffTabAudio : () => void startTabAudio()}
+                    aria-pressed={tabAudio.status === "on"}
+                    aria-busy={tabAudio.status === "starting"}
+                    disabled={tabAudio.status === "starting"}
+                    aria-label="Real equalizer"
+                    title={
+                      tabAudio.status === "on"
+                        ? "Real equalizer on. Click to turn off."
+                        : "Make the equalizer follow the real sound. Your browser will ask you to share this tab with its audio. Nothing is recorded or sent. Desktop Chrome or Edge only."
+                    }
+                  >
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden fill="currentColor">
+                      <rect x="2" y="8" width="2.4" height="6" />
+                      <rect x="6.8" y="3" width="2.4" height="11" />
+                      <rect x="11.6" y="6" width="2.4" height="8" />
+                    </svg>
+                  </button>
+                )}
+              </span>
+            )}
           </div>
         </div>
 
@@ -383,6 +431,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
         {tuned && !connected && <p className="banner">RECONNECTING…</p>}
         {configError && <p className="banner">PLAYER CONFIGURATION ERROR (153)</p>}
         <BrowserNote />
+        {tabAudio.status === "failed" && <p className="dim">{tabAudioMessage(tabAudio.reason)}</p>}
 
         {!tuned ? (
           <button className="btn tune" disabled={!apiReady} onClick={tuneIn}>
@@ -417,29 +466,6 @@ export function Station({ token, online }: { token: string; online: boolean }) {
                 ▶ TAP TO RESUME
               </button>
             )}
-            {keepAwake.supported && (
-              <button
-                className="btn quiet"
-                onClick={keepAwake.toggle}
-                aria-pressed={keepAwake.wanted}
-                aria-label={`Keep screen on${keepAwake.wanted && !keepAwake.active ? " (waiting for the browser)" : ""}`}
-                title="Stops the screen from turning off so the player keeps playing. Uses more battery."
-              >
-                {keepAwake.wanted ? (keepAwake.active ? "SCREEN ON ✓" : "SCREEN ON …") : "KEEP SCREEN ON"}
-              </button>
-            )}
-            {tabAudioSupported() && (
-              <button
-                className="btn quiet"
-                onClick={tabAudio.status === "on" ? turnOffTabAudio : () => void startTabAudio()}
-                aria-pressed={tabAudio.status === "on"}
-                disabled={tabAudio.status === "starting"}
-                title="Make the equalizer follow the real sound. Your browser will ask you to share this tab with its audio. Nothing is recorded or sent. Desktop Chrome or Edge only."
-              >
-                {tabAudio.status === "on" ? "REAL EQ ✓" : tabAudio.status === "starting" ? "REAL EQ …" : "REAL EQ"}
-              </button>
-            )}
-            {tabAudio.status === "failed" && <p className="dim">{tabAudioMessage(tabAudio.reason)}</p>}
           </div>
         )}
       </Win>
