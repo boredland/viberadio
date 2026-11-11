@@ -30,7 +30,7 @@ type SlackEventBody = {
   team_id?: string;
   event_id?: string;
   authorizations?: { user_id: string }[];
-  event?: SlackMessage & { user?: string; channel?: string };
+  event?: SlackMessage & { user?: string; channel?: string; tokens?: { oauth?: string[]; bot?: string[] } };
 };
 
 const json = (body: unknown, status = 200) =>
@@ -98,12 +98,15 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   const event = body.event;
   const teamId = body.team_id;
 
-  // The token is dead either way: forget it, so nothing keeps calling Slack with it. Stations stay (their links keep
-  // working for listeners), and a reinstall brings a fresh token.
-  if (event?.type === "app_uninstalled" || event?.type === "tokens_revoked") {
+  // The bot token is dead: forget it, so nothing keeps calling Slack with it. Stations stay (their links keep working for
+  // listeners), and a reinstall brings a fresh token. tokens_revoked also fires when only user tokens were revoked
+  // (`tokens.oauth`), which leaves the bot token working, so it counts only with a non-empty `tokens.bot`.
+  const botRevoked = event?.type === "tokens_revoked" && (event.tokens?.bot?.length ?? 0) > 0;
+  if (event?.type === "app_uninstalled" || botRevoked) {
     if (teamId) await registry(env).removeInstall(teamId);
     return;
   }
+  if (event?.type === "tokens_revoked") return;
 
   const channel = event?.channel;
   if (!event || !teamId || !channel) return;
