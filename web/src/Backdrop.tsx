@@ -1055,7 +1055,9 @@ const snowScene: Scene = (w, h) => {
         if (p.layer !== layer) continue;
         const base = hy + (layer === 0 ? 2 : h * 0.045);
         const th = h * p.height * (layer === 0 ? 1 : 1.4);
-        const shiver = bands ? Math.sin(t / 150 + p.phase) * 2.2 * pulse : 0;
+        // Tip sway in px: a base amount plus a share of the tree's height, so tall trees swing visibly further. It uses
+        // the eased pulse, so a kick swings the tips out and back instead of snapping them.
+        const shiver = bands ? Math.sin(t / 150 + p.phase) * (2 + th * 0.02) * auroraPulse : 0;
         pine(ctx, p.x * w, base, th, layer === 0 ? 0.7 : 0.97, shiver);
       }
     }
