@@ -389,51 +389,133 @@ const SCENES: Record<Exclude<BackgroundId, "kivo">, Scene> = {
   plain: plainScene,
 };
 
+type KivoFrames = { frames: VideoFrame[]; durations: number[] };
+
 /**
- * Kivo: the supplied morphing-heart loop (web/public/kivo-heart-morph.webp, 33 frames, 70 ms each) plays behind the panels,
- * with a big centre tile over a mirrored field. With REAL EQ on, the centre tile scales with the bass and the wash with the
- * treble; without it the loop just plays, so the backdrop stays mute.
+ * Decodes the animated WebP into individual frames. Chrome can play an animated WebP in an <img>, but that cannot be paused
+ * for reduced motion and it did not animate in my headless test browser, so the frames are driven explicitly instead.
+ * Returns null where ImageDecoder is unavailable (Firefox, Safari): the caller then just shows the still frame.
+ */
+async function decodeKivo(signal: AbortSignal): Promise<KivoFrames | null> {
+  if (!("ImageDecoder" in window)) return null;
+  const D = window.ImageDecoder;
+  const res = await fetch("/kivo-heart-morph.webp", { signal });
+  const data = await res.arrayBuffer();
+  const dec = new D({ data, type: "image/webp" });
+  try {
+    await dec.tracks.ready;
+    if (!dec.tracks.selectedTrack) return null;
+    const count = dec.tracks.selectedTrack.frameCount;
+    const frames: VideoFrame[] = [];
+    const durations: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const { image } = await dec.decode({ frameIndex: i });
+      frames.push(image);
+      durations.push(image.duration ? image.duration / 1000 : 70);
+    }
+    return { frames, durations };
+  } finally {
+    dec.close();
+  }
+}
+/**
+ * Kivo: the supplied morphing-heart loop drawn frame by frame (see decodeKivo) behind the panels, with a big centre tile
+ * over a dimmed field. With REAL EQ on, the centre tile scales with the bass and the wash follows the treble; without it the
+ * loop just plays, so the backdrop stays mute.
  *
- * Reduced motion: the source WebP cannot be paused or seeked, so it is shown only as a decorative background, which
- * WCAG 2.2.2 allows. A truly still variant would need a frame extracted from it.
+ * Reduced motion: frame 13 (a heart) is held still and nothing animates. Where ImageDecoder is unavailable the same still
+ * frame comes from kivo-heart-still.png.
  */
 function KivoBackdrop() {
+  const canvas = useRef<HTMLCanvasElement>(null);
   const pulse = useRef<HTMLDivElement>(null);
   const hue = useRef<HTMLDivElement>(null);
-  const big = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const el = canvas.current;
+    const ctx = el?.getContext("2d");
+    if (!el || !ctx) return;
     const calm = reducedMotion();
+    const abort = new AbortController();
     let raf = 0;
-    let last = 0;
+    let disposed = false;
+    let frames: KivoFrames | null = null;
+    const still = new Image();
+    still.src = "/kivo-heart-still.png";
     const drive = createDrive();
+
     const draw = (t: number) => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (el.width !== Math.round(w * dpr) || el.height !== Math.round(h * dpr)) {
+        el.width = Math.round(w * dpr);
+        el.height = Math.round(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      let source: CanvasImageSource | null = null;
+      if (frames) {
+        const idx = calm ? 13 : Math.floor(t / 70) % frames.frames.length;
+        const f = frames.frames[idx];
+        if (f && f.displayWidth > 0) source = f;
+      } else if (still.complete && still.naturalWidth > 0) {
+        source = still;
+      }
+      if (!source) return;
+
       const a = calm ? null : drive(readLevels(), t);
-      if (pulse.current) pulse.current.style.opacity = a ? String(0.06 + 0.2 * a.bass) : "0";
+      const bass = a?.bass ?? 0;
+      if (pulse.current) pulse.current.style.opacity = a ? String(0.06 + 0.2 * bass) : "0";
       if (hue.current) hue.current.style.opacity = a ? String(0.03 + 0.09 * a.treble) : "0";
-      if (big.current) big.current.style.transform = `scale(${1 + (a?.bass ?? 0) * 0.06})`;
+
+      // Dimmed field of mirrored tiles, then the big centre tile that swells with the bass.
+      const cols = 4;
+      const rowsN = Math.max(1, Math.round((cols * h) / w));
+      const tw = w / cols;
+      const th = h / rowsN;
+      ctx.globalAlpha = 0.18;
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rowsN; j++) {
+          ctx.drawImage(source, i * tw, j * th, tw, th);
+        }
+      }
+      ctx.globalAlpha = 0.35;
+      const size = Math.min(w, h) * 0.46 * (1 + 0.06 * bass);
+      ctx.drawImage(source, (w - size) / 2, (h - size) / 2, size, size);
+      ctx.globalAlpha = 1;
     };
+
     const frame = (t: number) => {
       raf = requestAnimationFrame(frame);
-      if (t - last < 33) return;
-      last = t;
       draw(t);
     };
     if (!calm) raf = requestAnimationFrame(frame);
+    still.onload = () => draw(0);
     draw(0);
-    return () => cancelAnimationFrame(raf);
+
+    void decodeKivo(abort.signal)
+      .then((f) => {
+        if (disposed || !f || f.frames.length === 0) return;
+        frames = f;
+        draw(0);
+      })
+      .catch(() => {
+        // Decoding failed: the still frame stays.
+      });
+
+    return () => {
+      disposed = true;
+      abort.abort();
+      cancelAnimationFrame(raf);
+      frames?.frames.forEach((f) => f.close());
+    };
   }, []);
 
   return (
     <div className="backdrop kivo-scene" aria-hidden>
-      <div className="kivo-tiles">
-        {Array.from({ length: 16 }, (_, i) => (
-          <img key={i} src="/kivo-heart-morph.webp" alt="" />
-        ))}
-      </div>
-      <div ref={big} className="kivo-big">
-        <img src="/kivo-heart-morph.webp" alt="" />
-      </div>
+      <canvas ref={canvas} className="kivo-canvas" />
       <div ref={pulse} className="kivo-pulse" />
       <div ref={hue} className="kivo-hue" />
     </div>
