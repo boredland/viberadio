@@ -311,18 +311,32 @@ const sunriseScene: Scene = (w, h) => (ctx, t, audio) => {
   ctx.fillStyle = sea;
   ctx.fillRect(0, hy, w, h - hy);
 
-  // Shimmer path: short horizontal glints under the sun that widen toward the viewer and flicker.
+  // Shimmer path: short horizontal glints under the sun that widen toward the viewer and flicker. With REAL EQ on, each row
+  // is one band of the spectrum (bass nearest the viewer, treble at the horizon) and its glint grows and brightens with that
+  // band's level, so the water reads as an equalizer. Without it the calm flicker stays.
   const rows = 26;
+  const bands = audio?.bands.length ? audio.bands : null;
   for (let i = 0; i < rows; i++) {
     const z = (i + 1) / rows;
     const y = hy + (h - hy) * z * z;
     const spread = r * (0.5 + 2.4 * z);
     const wob = Math.sin(t / 600 + i * 1.7) * spread * 0.18;
-    const a = (0.55 - 0.4 * z) * (0.55 + 0.45 * Math.sin(t / 340 + i * 2.3)) * (1 + 0.5 * pulse);
+    let a: number;
+    let lw: number;
+    let thick: number;
+    if (bands) {
+      const level = bands[Math.round((1 - z) * (bands.length - 1))];
+      a = (0.1 + 0.7 * level) * (1 - 0.3 * z);
+      lw = spread * (0.35 + 0.85 * level);
+      thick = 1.5 + 2 * z + 1.5 * level;
+    } else {
+      a = (0.55 - 0.4 * z) * (0.55 + 0.45 * Math.sin(t / 340 + i * 2.3));
+      lw = spread * (0.5 + 0.5 * Math.abs(Math.sin(i * 12.9898)));
+      thick = 1.5 + 2 * z;
+    }
     if (a <= 0.02) continue;
     ctx.fillStyle = `rgba(255,230,170,${Math.min(0.9, a)})`;
-    const lw = spread * (0.5 + 0.5 * Math.abs(Math.sin(i * 12.9898)));
-    ctx.fillRect(cx - lw / 2 + wob, y, lw, 1.5 + 2 * z);
+    ctx.fillRect(cx - lw / 2 + wob, y, lw, thick);
   }
 
   ctx.strokeStyle = `rgba(255,214,150,${0.6 + 0.3 * pulse})`;

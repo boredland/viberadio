@@ -1,4 +1,5 @@
-export type Drive = { bass: number; treble: number };
+/** `bands` holds one smoothed 0..1 level per spectrum bar, bass first. It is the drive's own array: read it per frame, never keep it. */
+export type Drive = { bass: number; treble: number; bands: Float32Array };
 
 /** Share of the bars that count as low end and as high end. Bars are log-spaced, so 30% each side is ~60-300 Hz and ~2.6-14 kHz. */
 const BAND = 0.3;
@@ -16,6 +17,10 @@ const BASELINE_MS = 1500;
 /** A tab that was in the background sends one huge step; treat it as one normal frame. */
 const MAX_STEP_MS = 100;
 
+/** The glints should snap up with a note and trail off a little slower, like a classic EQ bar. */
+const BAND_ATTACK_MS = 30;
+const BAND_RELEASE_MS = 160;
+
 /** One-pole smoothing toward `target`, quick going up and slow going down. Time-based, so the frame rate does not matter. */
 function follow(value: number, target: number, dt: number): number {
   const tau = target > value ? ATTACK_MS : RELEASE_MS;
@@ -32,10 +37,11 @@ export function createDrive(): (levels: Float32Array | null, now: number) => Dri
   let bass = 0;
   let treble = 0;
   let last = -1;
-  const out: Drive = { bass: 0, treble: 0 };
+  const out: Drive = { bass: 0, treble: 0, bands: new Float32Array(0) };
   return (levels, now) => {
     if (!levels) {
       avg = bass = treble = 0;
+      out.bands.fill(0);
       last = -1;
       return null;
     }
@@ -50,6 +56,12 @@ export function createDrive(): (levels: Float32Array | null, now: number) => Dri
     avg += (low - avg) * (1 - Math.exp(-dt / BASELINE_MS));
     bass = follow(bass, Math.min(1, jump) * BASS_CAP, dt);
     treble = follow(treble, high, dt);
+    if (out.bands.length !== levels.length) out.bands = new Float32Array(levels.length);
+    for (let i = 0; i < levels.length; i++) {
+      const b = out.bands[i];
+      const tau = levels[i] > b ? BAND_ATTACK_MS : BAND_RELEASE_MS;
+      out.bands[i] = b + (levels[i] - b) * (1 - Math.exp(-dt / tau));
+    }
     out.bass = bass;
     out.treble = treble;
     return out;
