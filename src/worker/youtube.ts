@@ -15,6 +15,62 @@ export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null>
   }
 }
 
+/** Short, because this runs inside the add path and the track advance: a slow YouTube must delay neither for long. */
+const CATEGORY_TIMEOUT_MS = 3000;
+
+/**
+ * The category the uploader gave a video ("Music", "Education", ...), from the same player endpoint the watch page calls.
+ * That answer is about 10 KB, where the watch page is about 1.4 MB. It is not a documented API, so any failure (blocked
+ * address, changed shape, timeout) is null and callers must treat null as "unknown", never as "not music".
+ */
+export async function fetchVideoCategory(videoId: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://www.youtube.com" },
+      body: JSON.stringify({
+        videoId,
+        // hl=en so the name is English: the check below compares names.
+        context: { client: { clientName: "WEB", clientVersion: "2.20250101.00.00", hl: "en" } },
+        contentCheckOk: true,
+        racyCheckOk: true,
+      }),
+      signal: AbortSignal.timeout(CATEGORY_TIMEOUT_MS),
+    });
+    if (res.status !== 200) return null;
+    const m = /"category":"((?:[^"\\]|\\.)+)"/.exec(await res.text());
+    return m ? m[1].replace(/\\u0026/g, "&") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** YouTube's fixed category names other than Music. */
+const NON_MUSIC_CATEGORIES = new Set([
+  "Film & Animation",
+  "Autos & Vehicles",
+  "Pets & Animals",
+  "Sports",
+  "Travel & Events",
+  "Gaming",
+  "People & Blogs",
+  "Comedy",
+  "Entertainment",
+  "News & Politics",
+  "Howto & Style",
+  "Education",
+  "Science & Technology",
+  "Nonprofits & Activism",
+]);
+
+/**
+ * True only for a category that is certainly not music. A missing category, or a name not on the list (a localized one, or a
+ * category YouTube adds later), is not enough to turn a link away, so the filter fails open.
+ */
+export function isNonMusic(category: string | null): category is string {
+  return category !== null && NON_MUSIC_CATEGORIES.has(category);
+}
+
 export type PlaylistVideo = VideoMeta & { videoId: string };
 export type Playlist = { title: string; videos: PlaylistVideo[] };
 

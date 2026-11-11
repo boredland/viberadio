@@ -8,6 +8,7 @@ type Result = {
   playlists?: { id: string; title: string; added: number; truncated: boolean }[];
   playlistsFailed?: string[];
   unavailable: string[];
+  rejected?: { videoId: string; category: string }[];
 };
 type Phase = { kind: "idle" } | { kind: "sending" } | { kind: "done"; result: Result } | { kind: "error"; message: string };
 
@@ -53,9 +54,11 @@ export function Share() {
           message:
             body.error === "none_playable"
               ? "Nothing there can be played here: the video is unavailable or can't be embedded, or the playlist is private or an album."
-              : body.error === "nothing_new"
-                ? "The playlist was read, but its videos are the ones already in what you shared."
-                : "No YouTube video in what you shared.",
+              : body.error === "not_music"
+                ? "Only music goes on this radio, and what you shared is filed under another category on YouTube."
+                : body.error === "nothing_new"
+                  ? "The playlist was read, but its videos are the ones already in what you shared."
+                  : "No YouTube video in what you shared.",
         });
       }
       if (!res.ok) return setPhase({ kind: "error", message: `Couldn't add it (${res.status}). Try again.` });
@@ -99,6 +102,9 @@ export function Share() {
             )}
             {phase.result.unavailable.length > 0 && (
               <p className="banner">{phase.result.unavailable.length} unavailable or not embeddable, skipped</p>
+            )}
+            {(phase.result.rejected?.length ?? 0) > 0 && (
+              <p className="banner">{phase.result.rejected!.length} not music, skipped</p>
             )}
           </>
         ) : (

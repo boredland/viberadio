@@ -5,7 +5,7 @@ import { extractVideoIds } from "../../shared/video";
 import { botTokenFor } from "./install";
 import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
-import { fetchVideoMeta } from "./youtube";
+import { fetchVideoCategory, fetchVideoMeta, isNonMusic } from "./youtube";
 
 type StationState = {
   teamId: string;
@@ -38,6 +38,8 @@ type LibraryRow = {
   added_by_id: string | null;
   /** Resolved display name, cached so a name is looked up once per person, not once per play. */
   added_by: string | null;
+  /** 1 = confirmed music, 0 = turned away as not music, null = not checked yet or YouTube would not say. */
+  music: number | null;
 };
 
 export type EnqueueItem = {
@@ -54,6 +56,8 @@ export type Adder = { id: string | null; name: string | null };
 const SEEN_CAP = 500;
 /** Workers Free allows 50 subrequests per invocation; stay well under. */
 const MAX_ROWS_EXAMINED = 20;
+/** See pickNext: bounds the category lookups one track pick may spend. */
+const MAX_CATEGORY_LOOKUPS_PER_PICK = 8;
 const BACKFILL_PAGE_DELAY_MS = 1500;
 const BACKFILL_DEFAULT_RETRY_S = 60;
 /** Slack errors that retrying cannot fix. */
@@ -101,6 +105,11 @@ export class Station extends DurableObject<Env> {
     // Shuffle bag: the cycle in which a track last played. New rows default to 0, so a fresh post is always in the current bag.
     if (!cols.some((c) => c.name === "played_cycle")) {
       ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN played_cycle INTEGER NOT NULL DEFAULT 0");
+    }
+    // Whether the video is music, learned the first time it comes up in the shuffle (playlist and backfilled videos were
+    // never checked when they were added). NULL means unknown, which the shuffle treats as playable.
+    if (!cols.some((c) => c.name === "music")) {
+      ctx.storage.sql.exec("ALTER TABLE library ADD COLUMN music INTEGER");
     }
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get<StationState>("state")) ?? null;
@@ -468,6 +477,9 @@ export class Station extends DurableObject<Env> {
           exclude,
         )
         .toArray()[0];
+    // Category lookups allowed in one pick: with the title and name lookups each row can cost three subrequests, and the
+    // Workers Free plan allows 50 per invocation. Past the cap an unchecked row simply plays (the filter fails open).
+    let categoryLookups = 0;
     for (let examined = 0; examined < MAX_ROWS_EXAMINED; examined++) {
       let row = draw(prevVideoId ?? "");
       if (!row) {
@@ -494,6 +506,20 @@ export class Station extends DurableObject<Env> {
           thumbnailUrl,
           row.video_id,
         );
+      }
+      if (row.music === 0) {
+        sql.exec("UPDATE library SET dead=1 WHERE video_id=?", row.video_id);
+        continue;
+      }
+      if (row.music === null && categoryLookups < MAX_CATEGORY_LOOKUPS_PER_PICK) {
+        categoryLookups++;
+        const category = await fetchVideoCategory(row.video_id);
+        if (isNonMusic(category)) {
+          sql.exec("UPDATE library SET music=0, dead=1 WHERE video_id=?", row.video_id);
+          continue;
+        }
+        // Only a positive answer is remembered; null (unknown) is retried next time.
+        if (category !== null) sql.exec("UPDATE library SET music=1 WHERE video_id=?", row.video_id);
       }
       // Every await above (the title lookup, the name lookup) lets other events run, and `current` is null while an advance
       // is in flight, so a removal in that window had nothing else to stop: it marks the row dead and this track would

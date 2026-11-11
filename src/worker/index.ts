@@ -3,7 +3,7 @@ import { WEB_ADDER, resolveSlackName } from "./names";
 import { botTokenFor, registry } from "./install";
 import { finishInstall, startInstall } from "./oauth";
 import { isUserMessage, slackChatPost, slackEscape, slackReact, verifySlackRequest, type SlackMessage } from "./slack";
-import { fetchPlaylist, fetchVideoMeta, type Playlist } from "./youtube";
+import { fetchPlaylist, fetchVideoCategory, fetchVideoMeta, isNonMusic, type Playlist } from "./youtube";
 import type { EnqueueItem } from "./station";
 
 export { StationRegistry } from "./registry";
@@ -63,6 +63,23 @@ async function announce(env: Env, botToken: string, origin: string, channel: str
 const MAX_PLAYLISTS = 3;
 
 type PlaylistRead = { id: string; playlist: Playlist | null };
+
+/**
+ * Splits resolved videos into those that stay and those turned away as not music, reading each one's category. Runs in
+ * parallel and costs one subrequest per video, so it covers only the links named in a message, never a playlist's videos
+ * (the playlist feed carries no category, and a 15-video playlist would spend most of the 50-subrequest budget).
+ */
+async function splitNonMusic(items: EnqueueItem[]): Promise<{ keep: EnqueueItem[]; rejected: { videoId: string; category: string }[] }> {
+  const categories = await Promise.all(items.map((i) => fetchVideoCategory(i.videoId)));
+  const keep: EnqueueItem[] = [];
+  const rejected: { videoId: string; category: string }[] = [];
+  items.forEach((item, i) => {
+    const category = categories[i];
+    if (isNonMusic(category)) rejected.push({ videoId: item.videoId, category });
+    else keep.push(item);
+  });
+  return { keep, rejected };
+}
 
 function readPlaylists(playlistIds: string[]): Promise<PlaylistRead[]> {
   return Promise.all(playlistIds.map(async (id) => ({ id, playlist: await fetchPlaylist(id) })));
@@ -141,19 +158,29 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
     if (meta) items.push({ videoId, seq, ...meta });
     else unavailable.push(videoId);
   }
+  const split = await splitNonMusic(items);
   const pl = playlistItems(reads, new Set(ids), ids.length);
 
   // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
   const adder = { id: event.user ?? null, name: await resolveSlackName(env, teamId, event.user) };
-  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, items, adder, pl.items);
+  const { accepted } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
   if (!accepted) return;
-  if (items.length > 0 || pl.items.length > 0) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
+  if (split.keep.length > 0 || pl.items.length > 0) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
   for (const videoId of unavailable) {
     await slackChatPost(
       env,
       botToken,
       channel,
       `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
+      threadTs,
+    );
+  }
+  for (const r of split.rejected) {
+    await slackChatPost(
+      env,
+      botToken,
+      channel,
+      `🎵 Only music goes on this radio: https://youtu.be/${r.videoId} is filed under “${slackEscape(r.category)}”, so it wasn't added`,
       threadTs,
     );
   }
@@ -237,16 +264,19 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   if (ids.length === 0 && playlistIds.length === 0) return json({ error: "no_video_links" }, 422);
 
   const [metas, reads] = await Promise.all([Promise.all(ids.map((id) => fetchVideoMeta(id))), readPlaylists(playlistIds)]);
-  const items: EnqueueItem[] = [];
+  const found: EnqueueItem[] = [];
   const unavailable: string[] = [];
   ids.forEach((videoId, seq) => {
     const meta = metas[seq];
-    if (meta) items.push({ videoId, seq, ...meta });
+    if (meta) found.push({ videoId, seq, ...meta });
     else unavailable.push(videoId);
   });
+  const { keep: items, rejected } = await splitNonMusic(found);
   const pl = playlistItems(reads, new Set(ids), ids.length);
 
   if (items.length === 0 && pl.items.length === 0) {
+    // Turned away for not being music is a different answer from unplayable, so the page can say which.
+    if (rejected.length > 0) return json({ error: "not_music", rejected, unavailable, playlistsFailed: pl.failed }, 422);
     // A playlist that read fine but contributed nothing (every video was named in the message already) is not a failed read.
     const error = pl.summaries.length > 0 ? "nothing_new" : "none_playable";
     return json({ error, unavailable, playlistsFailed: pl.failed }, 422);
@@ -271,6 +301,7 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
     playlists: pl.summaries,
     playlistsFailed: pl.failed,
     unavailable,
+    rejected,
     duplicate: !accepted,
   });
 }
