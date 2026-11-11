@@ -14,7 +14,7 @@ import { buildChain, loadEq, type EqChain } from "./eq";
 export type TabAudioState =
   | { status: "off" }
   | { status: "starting" }
-  | { status: "on"; eq: boolean; notice: "eq-unsafe" | null }
+  | { status: "on"; eq: boolean }
   | { status: "failed"; reason: "unsupported" | "denied" | "no-audio" | "error" };
 
 const BARS = 20;
@@ -58,10 +58,6 @@ function hasTabAudioCapture(): boolean {
 function isTouchOnly(): boolean {
   return window.matchMedia("(pointer: coarse)").matches && !window.matchMedia("(any-pointer: fine)").matches;
 }
-
-/** Shown when EQ mode was asked for but refused, so the listener knows why the sound is unchanged. */
-export const EQ_UNSAFE_MESSAGE =
-  "Equalizer not started: your browser did not silence the tab's own sound, or you shared something other than a browser tab, so the music would play twice. The bars still follow the real sound.";
 
 /** What to tell the listener when the toggle did not take. Each case has a different fix, so they are worded apart. */
 export function tabAudioMessage(reason: "unsupported" | "denied" | "no-audio" | "error"): string {
@@ -174,14 +170,7 @@ export async function startTabAudio(withEq = false, outputGain = 1): Promise<voi
     // The analyser only reads. Without EQ mode nothing reaches ctx.destination, so the captured copy never plays a second time.
     src.connect(a);
     let chain: EqChain | null = null;
-    // EQ mode plays a second copy, so it is only safe when the tab's own output really is silenced (the constraint is only a
-    // request and the browser may ignore it) and the user shared a browser tab rather than a window or screen. Otherwise the
-    // music would be heard twice, with the player held at full level. This does not prove it is THIS tab: the picker offers
-    // others and the API does not say which one was chosen.
-    const silenced = (track.getSettings() as MediaTrackSettings & { suppressLocalAudioPlayback?: boolean }).suppressLocalAudioPlayback === true;
-    const surface = (s.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string })?.displaySurface;
-    const eqOk = withEq && silenced && surface === "browser";
-    if (eqOk) chain = buildChain(c, src, c.destination, loadEq(), outputGain);
+    if (withEq) chain = buildChain(c, src, c.destination, loadEq(), outputGain);
 
     // "Stop sharing" during the resume wait ends the track before `stream` is published, so the listener above saw nothing.
     // Publishing it would show REAL EQ as on over silent bars, so refuse a track that is already dead.
@@ -196,7 +185,7 @@ export async function startTabAudio(withEq = false, outputGain = 1): Promise<voi
     analyser = a;
     eqChain = chain;
     bins = new Uint8Array(new ArrayBuffer(a.frequencyBinCount));
-    set({ status: "on", eq: eqOk, notice: withEq && !eqOk ? "eq-unsafe" : null });
+    set({ status: "on", eq: withEq });
   } catch (err) {
     release();
     if (abandoned()) return;

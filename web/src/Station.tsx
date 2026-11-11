@@ -8,7 +8,7 @@ import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
 import { bpmFor, setBeatSource } from "./Backdrop";
-import { EQ_UNSAFE_MESSAGE, eqActive, setEqOutput, startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
+import { eqActive, setEqOutput, startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
 import { EqPanel } from "./EqPanel";
 import { Look } from "./Look";
 import { loadVolume, saveVolume } from "./volume";
@@ -484,7 +484,6 @@ export function Station({ token, online }: { token: string; online: boolean }) {
               </button>
             )}
             {eqMode && <EqPanel />}
-            {tabAudio.status === "on" && tabAudio.notice === "eq-unsafe" && <p className="dim">{EQ_UNSAFE_MESSAGE}</p>}
             {tabAudio.status === "failed" && <p className="dim">{tabAudioMessage(tabAudio.reason)}</p>}
           </div>
         )}
