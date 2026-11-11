@@ -249,7 +249,9 @@ body::after {
 
 /* ---- buttons ---- */
 .controls { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 6px; align-items: center; }
-.controls .btn.amber, .controls .btn.quiet { grid-column: 1 / -1; }
+/* Full-row items. A note left to auto-place sizes the first `auto` column to its own text width, which stretches NEXT and
+   pushes the volume slider off the edge. */
+.controls .btn.amber, .controls .btn.quiet, .controls .dim { grid-column: 1 / -1; }
 
 .btn {
   font: 700 12px/1 var(--mono);
