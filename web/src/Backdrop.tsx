@@ -1,20 +1,10 @@
 import { useEffect, useRef } from "react";
 import { colors, useLook, type BackgroundId } from "./theme";
+import { getBeat, setBeatSource } from "./beat";
 import { reducedMotion } from "./ui";
 
-/** Beats elapsed on the station clock, or null while nothing plays or the clock is not synced yet. */
-type BeatSource = () => number | null;
-
-let beatSource: BeatSource | null = null;
-
-export function setBeatSource(source: BeatSource | null): void {
-  beatSource = source;
-}
-
-/** The current beat position (a float, fractional part = position within the beat), or null when nothing plays. */
-export function getBeat(): number | null {
-  return beatSource?.() ?? null;
-}
+// Re-exported so Station.tsx does not need to know the beat source lives in its own module.
+export { setBeatSource };
 
 /**
  * The YouTube iframe exposes no audio data, so the backdrop cannot follow the music itself. This is a stable per-track
@@ -256,7 +246,7 @@ export function Backdrop() {
     let h = 0;
     let painter: Painter = () => {};
 
-    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : (beatSource?.() ?? null));
+    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : (getBeat()));
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
