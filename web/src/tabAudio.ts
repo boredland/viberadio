@@ -5,8 +5,8 @@ import { useSyncExternalStore } from "react";
  * shares THIS tab with its audio, and an AnalyserNode reads the shared track. Nothing is recorded, stored or sent anywhere,
  * and the capture is never routed back to the speakers (that would double the sound), so playback is unaffected.
  *
- * Chromium on desktop only (Firefox gives no audio track for getDisplayMedia and hides the toggle; Safari is unsupported;
- * phones have no tab audio). The picker is browser UI and the user can stop at any time from the browser's own "Stop sharing" bar.
+ * Chromium on desktop only (Firefox and Safari give no audio track for getDisplayMedia, so the toggle is hidden there; phones
+ * have no tab audio). The picker is browser UI and the user can stop at any time from the browser's own "Stop sharing" bar.
  */
 
 export type TabAudioState =
@@ -35,17 +35,19 @@ export function tabAudioSupported(): boolean {
     typeof navigator !== "undefined" &&
     typeof navigator.mediaDevices?.getDisplayMedia === "function" &&
     !isTouchOnly() &&
-    !isGecko()
+    hasTabAudioCapture()
   );
 }
 
 /**
- * Firefox exposes getDisplayMedia but never returns an audio track for it (Mozilla bug 1541425, open since 2019), so offering
- * the toggle there can only end in an error note. Detected by a Gecko-only property rather than the user-agent string, which
- * other browsers can imitate. If Firefox ships tab audio, drop this check.
+ * Only Chromium returns an audio track from getDisplayMedia for a shared tab. Firefox exposes the method but never returns
+ * audio (Mozilla bug 1541425, open since 2019), and desktop Safari does the same, so for both the toggle could only end in an
+ * error note. CaptureController ships in Chromium alone, which makes it a feature test for exactly that family (it is not
+ * about zoom control, only a marker); a user-agent sniff would miss Safari and can be spoofed. If Firefox or Safari ever ship
+ * tab audio, replace this with a check that does not exclude them.
  */
-function isGecko(): boolean {
-  return "mozInnerScreenX" in window;
+function hasTabAudioCapture(): boolean {
+  return "CaptureController" in window;
 }
 
 /** Phones and tablets expose no tab audio even where getDisplayMedia exists; do not offer a toggle that cannot work. */
