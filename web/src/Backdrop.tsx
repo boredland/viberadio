@@ -325,7 +325,9 @@ const sunriseScene: Scene = (w, h) => (ctx, t, audio) => {
     let lw: number;
     let thick: number;
     if (bands) {
-      const level = bands[Math.round((1 - z) * (bands.length - 1))];
+      // Row 0 (horizon) is the top band and the last row the bottom band, so all of them get a row. Taking the band from z
+      // instead stopped one short of the top band, and the highest band never lit.
+      const level = bands[Math.round((1 - i / (rows - 1)) * (bands.length - 1))];
       a = (0.1 + 0.7 * level) * (1 - 0.3 * z);
       lw = spread * (0.35 + 0.85 * level);
       thick = 1.5 + 2 * z + 1.5 * level;
