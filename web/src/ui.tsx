@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { colors } from "./theme";
 
 export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -86,12 +87,13 @@ export function Visualizer({ active }: { active: boolean }) {
         peak[i] = Math.max(level[i], peak[i] - 0.03);
         const segs = Math.round(level[i] * 10);
         for (let s = 0; s < segs; s++) {
-          ctx.fillStyle = s < 6 ? "#00ff66" : s < 8 ? "#d7ff3a" : "#ff8a1f";
+          const c = colors();
+          ctx.fillStyle = s < 6 ? c.accent : s < 8 ? c.vizMid : c.vizHi;
           ctx.fillRect(i * bw + 1, h - (s + 1) * (h / 10) + 1, bw - 2, h / 10 - 1);
         }
         const p = Math.round(peak[i] * 10);
         if (p > 0) {
-          ctx.fillStyle = "#c8ffd9";
+          ctx.fillStyle = colors().peak;
           ctx.fillRect(i * bw + 1, h - p * (h / 10), bw - 2, 2);
         }
       }

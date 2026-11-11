@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { colors, useLook, type BackgroundId } from "./theme";
 import { reducedMotion } from "./ui";
 
 /** Beats elapsed on the station clock, or null while nothing plays or the clock is not synced yet. */
@@ -36,14 +37,23 @@ const STARS = (() => {
   return Array.from({ length: 70 }, () => ({ x: rnd(), y: rnd() * 0.85, phase: rnd() * 6.28, size: rnd() < 0.15 ? 2 : 1 }));
 })();
 
+/** Kick-shaped envelope: full strength on the beat, fast decay. */
+const envelope = (beat: number | null): number => (beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5));
+
+/**
+ * A scene is built for one canvas size and returns its frame painter. State that lives across frames (the matrix columns)
+ * belongs to the painter, so a resize starts it fresh.
+ */
+type Painter = (ctx: CanvasRenderingContext2D, t: number, beat: number | null) => void;
+type Scene = (w: number, h: number) => Painter;
+
 const HORIZON = 0.64;
 const GRID_ROWS = 14;
 
-function paint(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, beat: number | null): void {
+function paintSunset(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, beat: number | null): void {
   const hy = h * HORIZON;
   const cx = w / 2;
-  // Kick-shaped envelope: full strength on the beat, fast decay.
-  const pulse = beat === null ? 0 : Math.exp(-(beat - Math.floor(beat)) * 5);
+  const pulse = envelope(beat);
 
   const sky = ctx.createLinearGradient(0, 0, 0, hy);
   sky.addColorStop(0, "#08011c");
@@ -131,10 +141,97 @@ function paint(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, b
   ctx.stroke();
 }
 
-/** Sunset backdrop. Static for reduced-motion users; otherwise drifts, and pulses while a beat source is set. */
+const GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄ0123456789<>/\\{}[]=+*#$%";
+const MATRIX_STEP_MS = 60;
+const MATRIX_SIZE = 16;
+
+/** Falling glyphs in the theme's accent colour; they brighten on the beat. */
+const matrixScene: Scene = (w, h) => {
+  const drops = Array.from({ length: Math.ceil(w / MATRIX_SIZE) }, () => Math.random() * -50);
+  let last = -Infinity;
+  let primed = false;
+  return (ctx, t, beat) => {
+    const c = colors();
+    if (!primed) {
+      ctx.fillStyle = c.bg;
+      ctx.fillRect(0, 0, w, h);
+      primed = true;
+    }
+    // The painter is called at the canvas frame rate; the columns advance at the slower classic rate.
+    if (t - last < MATRIX_STEP_MS) return;
+    last = t;
+    ctx.fillStyle = `rgba(${c.bgRgb}, 0.12)`;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = `rgba(${c.accentRgb}, ${0.45 + 0.45 * envelope(beat)})`;
+    ctx.font = `${MATRIX_SIZE}px ui-monospace, Menlo, monospace`;
+    for (let i = 0; i < drops.length; i++) {
+      ctx.fillText(GLYPHS[(Math.random() * GLYPHS.length) | 0], i * MATRIX_SIZE, drops[i] * MATRIX_SIZE);
+      if (drops[i] * MATRIX_SIZE > h && Math.random() > 0.975) drops[i] = 0;
+      drops[i] += 1;
+    }
+  };
+};
+
+/** A starry sky with a moon, glowing in the theme's accent colour toward the horizon. */
+const nightScene: Scene = (w, h) => (ctx, t, beat) => {
+  const c = colors();
+  const pulse = envelope(beat);
+  ctx.fillStyle = c.bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const horizon = ctx.createLinearGradient(0, h * 0.4, 0, h);
+  horizon.addColorStop(0, `rgba(${c.accentRgb}, 0)`);
+  horizon.addColorStop(1, `rgba(${c.accentRgb}, ${0.2 + 0.2 * pulse})`);
+  ctx.fillStyle = horizon;
+  ctx.fillRect(0, h * 0.4, w, h * 0.6);
+
+  for (const s of STARS) {
+    const a = 0.25 + 0.5 * (0.5 + 0.5 * Math.sin(t / 900 + s.phase));
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.fillRect(s.x * w, s.y * h, s.size, s.size);
+  }
+
+  const mx = w * 0.8;
+  const my = Math.min(h * 0.18, 150);
+  const mr = Math.max(18, Math.min(w, h) * 0.035) * (1 + 0.05 * pulse);
+  const halo = ctx.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 4);
+  halo.addColorStop(0, `rgba(${c.accentRgb}, ${0.35 + 0.25 * pulse})`);
+  halo.addColorStop(1, `rgba(${c.accentRgb}, 0)`);
+  ctx.fillStyle = halo;
+  ctx.fillRect(mx - mr * 4, my - mr * 4, mr * 8, mr * 8);
+  ctx.fillStyle = c.peak;
+  ctx.beginPath();
+  ctx.arc(mx, my, mr, 0, Math.PI * 2);
+  ctx.fill();
+};
+
+/** The theme's background colour with a faint glow at the top; the quietest option. */
+const plainScene: Scene = (w, h) => (ctx, _t, beat) => {
+  const c = colors();
+  ctx.fillStyle = c.bg;
+  ctx.fillRect(0, 0, w, h);
+  const glow = ctx.createRadialGradient(w / 2, 0, 0, w / 2, 0, Math.max(w, h) * 0.7);
+  glow.addColorStop(0, `rgba(${c.accentRgb}, ${0.12 + 0.1 * envelope(beat)})`);
+  glow.addColorStop(1, `rgba(${c.accentRgb}, 0)`);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, h);
+};
+
+const sunsetScene: Scene = (w, h) => (ctx, t, beat) => paintSunset(ctx, w, h, t, beat);
+
+const SCENES: Record<BackgroundId, Scene> = {
+  sunset: sunsetScene,
+  matrix: matrixScene,
+  night: nightScene,
+  plain: plainScene,
+};
+
+/** The page backdrop. Static for reduced-motion users; otherwise animated, and pulsing while a beat source is set. */
 export function Backdrop() {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const { bg, theme } = useLook();
 
+  // `theme` is a dependency because the scenes read the theme's colours when they paint: a new theme needs a new frame.
   useEffect(() => {
     const el = canvas.current;
     const ctx = el?.getContext("2d");
@@ -142,8 +239,9 @@ export function Backdrop() {
     const calm = reducedMotion();
     let w = 0;
     let h = 0;
+    let painter: Painter = () => {};
 
-    const draw = (t: number) => paint(ctx, w, h, calm ? 0 : t, calm ? null : (beatSource?.() ?? null));
+    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : (beatSource?.() ?? null));
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
@@ -151,6 +249,7 @@ export function Backdrop() {
       el.width = Math.round(w * dpr);
       el.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      painter = SCENES[bg](w, h);
       draw(0);
     };
     resize();
@@ -169,7 +268,7 @@ export function Backdrop() {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
     };
-  }, []);
+  }, [bg, theme]);
 
   return <canvas className="backdrop" ref={canvas} aria-hidden />;
 }

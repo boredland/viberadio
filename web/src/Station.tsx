@@ -8,6 +8,7 @@ import { useKeepAwake } from "./wakeLock";
 import { forgetStation } from "./pwa";
 import { Rotation } from "./Rotation";
 import { bpmFor, setBeatSource } from "./Backdrop";
+import { Look } from "./Look";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -457,6 +458,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
           onRemove={(videoId) => connRef.current?.send({ type: "removeVideo", videoId })}
         />
       )}
+      <Look />
       </div>
     </main>
   );

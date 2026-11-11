@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Look } from "./Look";
 import { InstallBar } from "./pwa";
 import { Win } from "./ui";
 
@@ -93,6 +94,7 @@ export function Landing({ online }: { online: boolean }) {
           <p className="dim">You're offline. Open your station link once you're back online.</p>
         </Win>
       )}
+      <Look />
       <InstallBar />
     </main>
   );
