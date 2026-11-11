@@ -359,7 +359,7 @@ export function Backdrop() {
     let painter: Painter = () => {};
 
     const drive = createDrive();
-    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : getBeat(), calm ? null : drive(readLevels()));
+    const draw = (t: number) => painter(ctx, calm ? 0 : t, calm ? null : getBeat(), calm ? null : drive(readLevels(), t));
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       w = window.innerWidth;
