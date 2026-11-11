@@ -928,6 +928,7 @@ const snowScene: Scene = (w, h) => {
   let lastT = -1;
   let auroraPhase = 0;
   let lastAuroraT = -1;
+  let auroraPulse = 0;
 
   const pine = (ctx: CanvasRenderingContext2D, x: number, base: number, th: number, alpha: number, shiver: number) => {
     ctx.fillStyle = `rgba(8, 18, 32, ${alpha})`;
@@ -979,9 +980,12 @@ const snowScene: Scene = (w, h) => {
     const adt = lastAuroraT < 0 ? 0 : Math.min(100, Math.max(0, t - lastAuroraT));
     lastAuroraT = t;
     auroraPhase += (adt / 2600) * (1 + 2.2 * mids);
+    // The raw bass pulse steps from ~0 to 1 in one frame on a kick, which snapped the ribbons by ~2% of the height.
+    // Ease it (attack ~60 ms, release ~350 ms) so a kick swells them instead.
+    auroraPulse += (pulse - auroraPulse) * (1 - Math.exp(-adt / (pulse > auroraPulse ? 60 : 350)));
     for (let k = 0; k < 3; k++) {
       const baseY = hy * (0.2 + k * 0.11);
-      const amp = h * (0.035 + 0.02 * pulse + 0.015 * mids);
+      const amp = h * (0.035 + 0.02 * auroraPulse + 0.015 * mids);
       ctx.beginPath();
       ctx.moveTo(0, baseY);
       for (let x = 0; x <= w; x += 12) {
@@ -991,7 +995,7 @@ const snowScene: Scene = (w, h) => {
       ctx.lineTo(0, baseY + h * 0.2);
       ctx.closePath();
       const g = ctx.createLinearGradient(0, baseY - amp, 0, baseY + h * 0.2);
-      const a = 0.14 + 0.16 * pulse + 0.05 * k;
+      const a = 0.14 + 0.16 * auroraPulse + 0.05 * k;
       g.addColorStop(0, `rgba(${SNOW_AURORA[k]}, 0)`);
       g.addColorStop(0.3, `rgba(${SNOW_AURORA[k]}, ${a.toFixed(3)})`);
       g.addColorStop(1, `rgba(${SNOW_AURORA[k]}, 0)`);
