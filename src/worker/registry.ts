@@ -15,6 +15,8 @@ export type Install = { teamId: string; teamName: string; botToken: string; botU
 const STATE_TTL_MS = 10 * 60_000;
 /** Outstanding installs at once; far above any real use, low enough that spamming /slack/install cannot fill storage. */
 const MAX_STATES = 200;
+/** Durable Object storage.delete(keys) limit. */
+const DELETE_BATCH = 128;
 
 export class StationRegistry extends DurableObject<Env> {
   async ensureStation(teamId: string, channelId: string): Promise<{ token: string; created: boolean }> {
@@ -73,7 +75,8 @@ export class StationRegistry extends DurableObject<Env> {
     const now = Date.now();
     const dead: string[] = [];
     for (const [k, until] of states) if (until <= now) dead.push(k);
-    if (dead.length > 0) await this.ctx.storage.delete(dead);
+    // delete(keys) accepts at most 128 keys per call, and a burst of abandoned installs can leave more than that expired.
+    for (let i = 0; i < dead.length; i += DELETE_BATCH) await this.ctx.storage.delete(dead.slice(i, i + DELETE_BATCH));
     return states.size - dead.length;
   }
 }

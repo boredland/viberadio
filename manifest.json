@@ -16,7 +16,10 @@
     ]
   },
   "oauth_config": {
-    "redirect_urls": ["https://venture-receiver-asbestos-commercial.trycloudflare.com/slack/oauth/callback"],
+    "redirect_urls": [
+      "https://venture-receiver-asbestos-commercial.trycloudflare.com/slack/oauth/callback",
+      "https://slackdj.jonas-strassel.de/slack/oauth/callback"
+    ],
     "scopes": { "bot": ["channels:history", "channels:read", "chat:write", "commands", "reactions:write", "users:read"] }
   },
   "settings": {
