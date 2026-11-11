@@ -11,6 +11,7 @@ import { bpmFor, setBeatSource } from "./Backdrop";
 import { startTabAudio, stopTabAudio, tabAudioMessage, tabAudioSupported, useTabAudio } from "./tabAudio";
 import { Look } from "./Look";
 import { loadVolume, saveVolume } from "./volume";
+import { BrowserNote } from "./BrowserNote";
 
 const DRIFT_TICK_MS = 5000;
 const UI_TICK_MS = 500;
@@ -379,6 +380,7 @@ export function Station({ token, online }: { token: string; online: boolean }) {
 
         {tuned && !connected && <p className="banner">RECONNECTING…</p>}
         {configError && <p className="banner">PLAYER CONFIGURATION ERROR (153)</p>}
+        <BrowserNote />
 
         {!tuned ? (
           <button className="btn tune" disabled={!apiReady} onClick={tuneIn}>

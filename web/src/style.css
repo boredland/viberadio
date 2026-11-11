@@ -352,6 +352,9 @@ input[type="range"]::-moz-range-thumb {
   letter-spacing: 0.1em;
 }
 
+.browser-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.browser-note .btn { flex: none; margin-left: auto; }
+
 /* ---- video ---- */
 .player {
   width: 100%;
