@@ -5,7 +5,7 @@ import { Win } from "./ui";
 export function Look() {
   const look = useLook();
   return (
-    <Win title="LOOK" fold={{ key: "look", label: "LOOK" }}>
+    <Win title="LOOK" fold={{ key: "look", label: "LOOK", foldedOnNarrow: true }}>
       <div role="group" aria-label="Colour theme" className="chips">
         {THEMES.map((t) => (
           <button

@@ -6,12 +6,17 @@ import { BARS, PAINTERS, loadViz, newVizState, nextViz, saveViz, vizLabel, type 
 
 export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function loadFolded(key: string): boolean {
+/** Phones: the stacked windows fill the screen and cover the backdrop, so some windows start folded there. */
+const NARROW = "(max-width: 600px)";
+
+function loadFolded(key: string, foldedOnNarrow?: boolean): boolean {
   try {
-    return localStorage.getItem(`viberadio:fold:${key}`) === "1";
+    const saved = localStorage.getItem(`viberadio:fold:${key}`);
+    if (saved !== null) return saved === "1";
   } catch {
-    return false;
+    // storage unavailable: fall through to the default
   }
+  return Boolean(foldedOnNarrow) && window.matchMedia(NARROW).matches;
 }
 
 /** Without `fold` a window is a plain frame. With it the body can be hidden behind a button, and the choice is saved per device. */
@@ -25,11 +30,13 @@ type Fold = {
    * playback, and the IFrame API needs a viewport of at least 200x200.
    */
   keepLive?: boolean;
+  /** Start folded on a narrow screen when this device has no saved choice. The window's own choice, once made, always wins. */
+  foldedOnNarrow?: boolean;
 };
 
 /** A Winamp-style window: striped title bar over a bevelled body. */
 export function Win({ title, children, className = "", fold }: { title: string; children: ReactNode; className?: string; fold?: Fold }) {
-  const [folded, setFolded] = useState(() => (fold ? loadFolded(fold.key) : false));
+  const [folded, setFolded] = useState(() => (fold ? loadFolded(fold.key, fold.foldedOnNarrow) : false));
   const toggle = () => {
     if (!fold) return;
     setFolded((f) => {

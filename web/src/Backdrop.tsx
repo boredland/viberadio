@@ -54,7 +54,17 @@ type SceneMemory = Record<string, unknown>;
 type Scene = (w: number, h: number, mem: SceneMemory) => Painter;
 type RingState = { rings: number[]; lastRing: number; prevBass: number };
 type FallState = { lastGust: number; prevBass: number; gust: number; heights: number[]; lastT: number };
-type SnowState = FallState & { auroraPhase: number; lastAuroraT: number; auroraPulse: number };
+type SnowState = FallState & {
+  auroraPhase: number;
+  lastAuroraT: number;
+  auroraPulse: number;
+  moonX: number;
+  moonY: number;
+  moonTarget: { x: number; y: number };
+  moonSig: string;
+  moonAt: number;
+  moonT: number;
+};
 
 const HORIZON = 0.64;
 const GRID_ROWS = 14;
@@ -1067,6 +1077,84 @@ function drawSanta(ctx: CanvasRenderingContext2D, t: number, glow: number): void
 }
 
 /**
+ * Where the snow scene's moon should be. The panels are HTML drawn over this canvas, so their boxes are read from the page;
+ * the pines are painted over the moon, so their tiers are tested as triangles. Candidates are scored by the share of a
+ * disc's sample points that are neither under a panel nor inside a pine, and the best wins. A wide screen keeps its usual
+ * place low on the left when that is clear. The `sig` changes when the layout does, so the caller only moves the moon then.
+ */
+function findMoon(w: number, h: number, hy: number, mr: number, portrait: boolean, boxes: DOMRect[]): { x: number; y: number } {
+  const ridge = (x: number) => hy - h * 0.03 - Math.sin(x / 190) * h * 0.02 - Math.sin(x / 70 + 1) * h * 0.008;
+  const covered = (px: number, py: number): boolean => {
+    // The ridge fill (and everything under it) is painted over the moon.
+    if (py >= ridge(px)) return true;
+    for (const b of boxes) if (px >= b.left && px <= b.right && py >= b.top && py <= b.bottom) return true;
+    for (const p of PINES) {
+      const th = h * p.height * (p.layer === 0 ? 1 : 1.4);
+      const base = hy + (p.layer === 0 ? 2 : h * 0.045);
+      const cx = p.x * w;
+      for (let k = 0; k < 3; k++) {
+        const half = th * (0.3 - k * 0.07);
+        const apex = base - th * (0.46 + k * 0.27);
+        const bottom = base - th * (0.12 + k * 0.2);
+        if (py < apex || py > bottom) continue;
+        if (Math.abs(px - cx) <= (half * (py - apex)) / (bottom - apex)) return true;
+      }
+    }
+    return false;
+  };
+  // Sixteen points around the disc plus a ring at half radius and the centre: an estimate of how much of it shows. The score is
+  // squared when the centre is hidden, because a moon whose middle is under a panel reads as missing even if its rim peeks out.
+  const visible = (cx: number, cy: number): number => {
+    let seen = 0;
+    let total = 1;
+    if (!covered(cx, cy)) seen++;
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      total += 2;
+      if (!covered(cx + Math.cos(a) * mr * 0.9, cy + Math.sin(a) * mr * 0.9)) seen++;
+      if (!covered(cx + Math.cos(a) * mr * 0.45, cy + Math.sin(a) * mr * 0.45)) seen++;
+    }
+    const share = seen / total;
+    return covered(cx, cy) ? share * share : share;
+  };
+  const ridgeY = hy - h * 0.03;
+  const defaultSpot = portrait ? { x: w * 0.5, y: ridgeY - mr * 0.4 } : { x: w * 0.12, y: hy * 0.62 };
+  let best = { ...defaultSpot, score: visible(defaultSpot.x, defaultSpot.y) };
+  // Wide screens keep the usual place whenever it is clear; the search only runs when it is not, or on a portrait screen.
+  if (best.score < 1 || portrait) {
+    // The side gutters between the screen edge and the panels are a few pixels wide: a disc there is a sliver of rim, which
+    // scores well on a point count and reads as nothing. So a candidate must keep its whole disc inside the panels' span.
+    const spans = boxes.filter((b) => b.bottom > b.top && b.right - b.left > w * 0.5);
+    const left = spans.length ? Math.min(...spans.map((b) => b.left)) : 0;
+    const right = spans.length ? Math.max(...spans.map((b) => b.right)) : w;
+    // The whole sky band: from just inside the top edge to where the disc would sit on the ridge. A moon half-hidden by the
+    // ridge is allowed (it is rising), so the lower bound reaches below the ridge line by a third of its radius.
+    const lo = mr * 1.1;
+    const hi = Math.min(h - mr, ridgeY + mr * 0.35);
+    const step = Math.max(4, mr * 0.3);
+    let found: { x: number; y: number; score: number } | null = null;
+    for (let y = hi; y >= lo; y -= step) {
+      for (let x = Math.max(mr * 1.1, left + mr); x <= Math.min(w - mr * 1.1, right - mr); x += step) {
+        const s = visible(x, y);
+        // Strictly better wins, and the scan runs from the lowest row up, so ties stay low (a moon near the ridge reads as rising).
+        if (s > (found?.score ?? 0) + 1e-9) found = { x, y, score: s };
+      }
+    }
+    // A spot is taken only when most of the disc really shows (the gutter rule above already rules out slivers). Otherwise the
+    // moon stays on the default: rising out of the ridge, and never in a corner.
+    if (found && found.score >= 0.85 && found.score > best.score) best = found;
+  }
+  return { x: best.x, y: best.y };
+}
+
+/** The panel boxes and a signature of the layout: the viewport size and every box, so a fold or a resize is noticed cheaply. */
+function readLayout(w: number, h: number): { boxes: DOMRect[]; sig: string } {
+  const boxes = [...document.querySelectorAll(".win, .foot a")].map((e) => e.getBoundingClientRect());
+  const sig = `${w}x${h}|${boxes.map((b) => `${Math.round(b.left)},${Math.round(b.top)},${Math.round(b.right)},${Math.round(b.bottom)}`).join(";")}`;
+  return { boxes, sig };
+}
+
+/**
  * Snow: a clear winter night. Stars and a moon, a soft aurora, snowy pines on two ridges and a frozen lake, with snow
  * falling through all of it.
  *  - With REAL EQ on, every snowflake follows one spectrum band: a louder band makes its flake bigger, brighter and quicker.
@@ -1092,29 +1180,15 @@ const snowScene: Scene = (w, h, mem) => {
     auroraPhase: 0,
     lastAuroraT: -1,
     auroraPulse: 0,
+    moonX: 0,
+    moonY: 0,
+    moonTarget: { x: 0, y: 0 },
+    moonSig: "",
+    moonAt: -1,
+    moonT: -1,
   }) as SnowState;
 
   const mr = Math.min(w, h) * 0.045;
-  // Where the moon is not hidden by a pine: the middle of the widest stretch no pine covers. Each pine hides its widest
-  // tier (0.3 of its height to each side), so that is the span to keep clear, measured at this screen size. On a phone the
-  // panels (HTML, not part of this canvas) can still cover the sky: with the LOOK window folded the moon is fully visible.
-  const moonX = (() => {
-    const spans = PINES.map((p) => {
-      const half = h * p.height * (p.layer === 0 ? 1 : 1.4) * 0.3;
-      return [p.x * w - half, p.x * w + half] as const;
-    }).sort((a, b) => a[0] - b[0]);
-    let best = w * 0.5;
-    let widest = 0;
-    let edge = 0;
-    for (const [from, to] of [...spans, [w, w] as const]) {
-      if (from - edge > widest) {
-        widest = from - edge;
-        best = (from + edge) / 2;
-      }
-      edge = Math.max(edge, to);
-    }
-    return best;
-  })();
 
   const pine = (ctx: CanvasRenderingContext2D, x: number, base: number, th: number, alpha: number, shiver: number) => {
     ctx.fillStyle = `rgba(8, 18, 32, ${alpha})`;
@@ -1191,11 +1265,35 @@ const snowScene: Scene = (w, h, mem) => {
       ctx.fill();
     }
 
-    // Moon with a halo. Wide screens have room low-left of centre. On a portrait screen the pines are drawn over the moon, so
-    // it rises on the ridge in the widest gap between them (see moonX).
-    const portrait = w < h;
-    const mx = portrait ? moonX : w * 0.12;
-    const my = portrait ? hy - h * 0.03 - mr * 0.4 : hy * 0.62;
+    // Moon with a halo. Where it sits comes from the real layout: the panels are HTML over this canvas and the pines are painted
+    // over the moon, so it goes where most of the disc is neither under a panel nor behind a pine (see findMoon). It glides
+    // when the layout changes, such as a window folding.
+    const mdt = st.moonT < 0 ? 0 : Math.min(100, Math.max(0, t - st.moonT));
+    st.moonT = t;
+    // Reading the panel boxes is a handful of rect reads; the search behind it is far dearer, so it runs only when the
+    // layout signature (viewport size and every box) has actually changed.
+    if (t - st.moonAt > 400 || st.moonAt < 0) {
+      st.moonAt = t;
+      const layout = readLayout(w, h);
+      if (layout.sig !== st.moonSig) {
+        const first = st.moonSig === "";
+        const moved = st.moonSig.split("|")[0] !== layout.sig.split("|")[0];
+        st.moonSig = layout.sig;
+        const found = findMoon(w, h, hy, mr, w < h, layout.boxes);
+        st.moonTarget = found;
+        // First placement, and a changed viewport size, snap: gliding from a position meant for another size would sweep across.
+        if (first || moved) {
+          st.moonX = found.x;
+          st.moonY = found.y;
+        }
+      }
+    }
+    // An ease with a ~450 ms time constant: a window folding moves the moon smoothly instead of jumping.
+    const glide = 1 - Math.exp(-mdt / 450);
+    st.moonX += (st.moonTarget.x - st.moonX) * glide;
+    st.moonY += (st.moonTarget.y - st.moonY) * glide;
+    const mx = st.moonX;
+    const my = st.moonY;
     const halo = ctx.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
     halo.addColorStop(0, `rgba(${SNOW_ICE}, ${(0.28 + 0.12 * pulse).toFixed(3)})`);
     halo.addColorStop(1, `rgba(${SNOW_ICE}, 0)`);
