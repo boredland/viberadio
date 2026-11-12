@@ -235,6 +235,7 @@ export class Station extends DurableObject<Env> {
                           WHEN library.added_by_id IS NULL THEN excluded.added_by_id ELSE library.added_by_id END,
          added_by=CASE WHEN library.dead=1 AND excluded.added_by_id IS NOT NULL THEN excluded.added_by
                        WHEN library.added_by_id IS NULL THEN excluded.added_by ELSE library.added_by END,
+         music=CASE WHEN library.music=0 THEN NULL ELSE library.music END,
          dead=0`,
       it.videoId,
       messageTs,

@@ -29,7 +29,7 @@ export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null 
 /** The part of the Worker environment the category lookup reads. The URL override is for local testing only. */
 export type YouTubeEnv = { YOUTUBE_API_KEY?: string; YOUTUBE_API_URL?: string };
 
-export type VideoCategory = { id: string; name: string };
+export type VideoCategory = { id: string; name: string; musicTopic: boolean };
 
 /** videos.list takes at most 50 ids per call, and a call costs one quota unit whatever the id count. */
 const CATEGORY_BATCH = 50;
@@ -73,7 +73,7 @@ export async function lookupVideoCategories(env: YouTubeEnv, videoIds: string[])
   for (let i = 0; i < unique.length; i += CATEGORY_BATCH) {
     const chunk = unique.slice(i, i + CATEGORY_BATCH);
     try {
-      const res = await fetch(`${base}/videos?part=snippet&fields=items(id,snippet(categoryId))&id=${chunk.join(",")}&key=${encodeURIComponent(key)}`, {
+      const res = await fetch(`${base}/videos?part=snippet,topicDetails&fields=items(id,snippet(categoryId),topicDetails(topicCategories))&id=${chunk.join(",")}&key=${encodeURIComponent(key)}`, {
         signal: AbortSignal.timeout(CATEGORY_TIMEOUT_MS),
       });
       if (res.status !== 200) {
@@ -83,12 +83,17 @@ export async function lookupVideoCategories(env: YouTubeEnv, videoIds: string[])
         if (res.status === 400) badRequest = true;
         continue;
       }
-      const body = (await res.json()) as { items?: { id?: string; snippet?: { categoryId?: string } }[] };
+      const body = (await res.json()) as {
+        items?: { id?: string; snippet?: { categoryId?: string }; topicDetails?: { topicCategories?: string[] } }[];
+      };
       for (const id of chunk) answered.add(id);
       for (const item of body.items ?? []) {
         const id = item.id;
         const cat = item.snippet?.categoryId;
-        if (id && cat) categories.set(id, { id: cat, name: CATEGORY_NAMES[cat] ?? `category ${cat}` });
+        // Wikipedia topic URLs: ".../wiki/Music" is the umbrella topic; ".../wiki/Pop_music" and the like are sub-genres that
+        // only ever appear beside it, so the umbrella alone is the test.
+        const musicTopic = (item.topicDetails?.topicCategories ?? []).some((u) => u.endsWith("/wiki/Music"));
+        if (id && cat) categories.set(id, { id: cat, name: CATEGORY_NAMES[cat] ?? `category ${cat}`, musicTopic });
       }
     } catch (e) {
       console.error("youtube categories", e);
@@ -102,9 +107,13 @@ export async function fetchVideoCategories(env: YouTubeEnv, videoIds: string[]):
   return (await lookupVideoCategories(env, videoIds)).categories;
 }
 
-/** True only for a video the API said is in a category other than Music. Unknown (no entry) is not enough to turn it away. */
+/**
+ * True only for a video the API said is neither filed under Music nor tagged with the Music topic. Unknown (no entry) is not
+ * enough to turn it away. The topic matters because uploaders pick the category by hand: a label's official video is often
+ * filed under People & Blogs or Entertainment, while YouTube's own topic data still says Music.
+ */
 export function isNonMusic(category: VideoCategory | undefined): category is VideoCategory {
-  return category !== undefined && category.id !== MUSIC_CATEGORY_ID;
+  return category !== undefined && category.id !== MUSIC_CATEGORY_ID && !category.musicTopic;
 }
 
 export type PlaylistVideo = VideoMeta & { videoId: string };
