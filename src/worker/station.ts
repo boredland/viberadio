@@ -176,11 +176,11 @@ export class Station extends DurableObject<Env> {
     adder: Adder = { id: null, name: null },
     /** Playlist videos: they join the shuffle without being queued. */
     libraryItems: EnqueueItem[] = [],
-  ): Promise<{ accepted: boolean; alreadyQueued: string[] }> {
+  ): Promise<{ accepted: boolean; alreadyQueued: string[]; libraryAdded: string[] }> {
     await this.init(teamId, channelId);
     const s = this.st();
     if (eventId !== null) {
-      if (s.seenEventIds.includes(eventId)) return { accepted: false, alreadyQueued: [] };
+      if (s.seenEventIds.includes(eventId)) return { accepted: false, alreadyQueued: [], libraryAdded: [] };
       s.seenEventIds.push(eventId);
       if (s.seenEventIds.length > SEEN_CAP) s.seenEventIds.splice(0, s.seenEventIds.length - SEEN_CAP);
     }
@@ -205,11 +205,18 @@ export class Station extends DurableObject<Env> {
       }
       this.upsertLibrary(it, messageTs, adder);
     }
-    for (const it of libraryItems) this.upsertLibrary(it, messageTs, adder);
+    // A playlist video already in the rotation (and not removed) is not new: report only the ones that are, so a repeated
+    // playlist is not announced as added again.
+    const libraryAdded: string[] = [];
+    for (const it of libraryItems) {
+      const had = this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM library WHERE video_id=? AND dead=0", it.videoId).one().n > 0;
+      this.upsertLibrary(it, messageTs, adder);
+      if (!had) libraryAdded.push(it.videoId);
+    }
     await this.persist();
     await this.maybeStart();
     this.broadcast();
-    return { accepted: true, alreadyQueued };
+    return { accepted: true, alreadyQueued, libraryAdded };
   }
 
   /**
@@ -570,10 +577,18 @@ export class Station extends DurableObject<Env> {
   private async checkCategories(videoId: string): Promise<void> {
     const sql = this.ctx.storage.sql;
     const others = sql
-      .exec<{ video_id: string }>("SELECT video_id FROM library WHERE dead=0 AND music IS NULL AND video_id != ? LIMIT ?", videoId, CATEGORY_BATCH_ROWS - 1)
+      .exec<{ video_id: string }>(
+        "SELECT video_id FROM library WHERE dead=0 AND music IS NULL AND video_id != ? ORDER BY RANDOM() LIMIT ?",
+        videoId,
+        CATEGORY_BATCH_ROWS - 1,
+      )
       .toArray()
       .map((r) => r.video_id);
-    const { categories, answered } = await lookupVideoCategories(this.env, [videoId, ...others]);
+    let lookup = await lookupVideoCategories(this.env, [videoId, ...others]);
+    // YouTube refused the whole batch as a bad request (one malformed id fails the call). Retry with just the picked row so one
+    // bad id cannot keep every row unchecked. Other failures (quota, 429, 5xx) would fail again, so they are not retried.
+    if (lookup.answered.size === 0 && lookup.badRequest && others.length > 0) lookup = await lookupVideoCategories(this.env, [videoId]);
+    const { categories, answered } = lookup;
     if (answered.size === 0) {
       this.categoryDownUntil = Date.now() + CATEGORY_RETRY_MS;
       return;

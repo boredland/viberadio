@@ -131,6 +131,22 @@ function playlistItems(reads: PlaylistRead[], taken: Set<string>, seqStart: numb
   return { items, summaries, failed };
 }
 
+/**
+ * The playlist summaries counted what the feed offered, not what the station took. A video already in the rotation is not
+ * new, so `added` is recounted from the station's own answer: a repeated playlist then reports 0, not its full length.
+ */
+function withNewCounts(pl: ReturnType<typeof playlistItems>, libraryAdded: string[]) {
+  const fresh = new Set(libraryAdded);
+  // Each playlist's items are consecutive, in summary order, so walk them in step with the summaries.
+  let cursor = 0;
+  return pl.summaries.map((s) => {
+    let added = 0;
+    for (let k = 0; k < s.added; k++) if (fresh.has(pl.items[cursor + k].videoId)) added++;
+    cursor += s.added;
+    return { ...s, added };
+  });
+}
+
 async function handleEvent(body: SlackEventBody, origin: string, env: Env): Promise<void> {
   const event = body.event;
   const teamId = body.team_id;
@@ -172,11 +188,15 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   const threadTs = event.thread_ts ?? event.ts;
   const [metas, reads] = await Promise.all([Promise.all(ids.map((id) => fetchVideoMeta(id))), readPlaylists(playlistIds)]);
   const items: EnqueueItem[] = [];
+  // `null` is YouTube saying the video is gone; `undefined` is YouTube not answering (timeout, 429, 5xx). The reply must not
+  // call a slow lookup an unavailable video, so they are reported apart.
   const unavailable: string[] = [];
+  const lookupFailed: string[] = [];
   for (const [seq, videoId] of ids.entries()) {
     const meta = metas[seq];
     if (meta) items.push({ videoId, seq, ...meta });
-    else unavailable.push(videoId);
+    else if (meta === null) unavailable.push(videoId);
+    else lookupFailed.push(videoId);
   }
   const notMusic = await nonMusicIds(env, [...items.map((i) => i.videoId), ...reads.flatMap((r) => r.playlist?.videos.map((v) => v.videoId) ?? [])]);
   const split = splitNamed(items, notMusic);
@@ -184,11 +204,11 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
 
   // enqueue dedupes on event_id, so a redelivered event gets neither a second reaction nor a second warning.
   const adder = { id: event.user ?? null, name: await resolveSlackName(env, teamId, event.user) };
-  const { accepted, alreadyQueued } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
+  const { accepted, alreadyQueued, libraryAdded } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
   if (!accepted) return;
   // Headphones only when something was actually queued. A message whose every link was already waiting or playing is
   // answered by the "already in the queue" reply below, and a headphones reaction would say it was added.
-  const queuedNew = split.keep.some((i) => !alreadyQueued.includes(i.videoId)) || pl.items.length > 0;
+  const queuedNew = split.keep.some((i) => !alreadyQueued.includes(i.videoId)) || libraryAdded.length > 0;
   const turnedAway = split.rejected.length > 0 || pl.summaries.some((p) => p.notMusic > 0);
   // A mixed message gets the headphones (its music is in) and a reply naming what was skipped; only a message with no
   // music at all gets the cross. A message that failed for another reason (unavailable video) gets neither, as before.
@@ -200,6 +220,15 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
       botToken,
       channel,
       `⚠️ Couldn't add https://youtu.be/${videoId} — video unavailable or not embeddable`,
+      threadTs,
+    );
+  }
+  for (const videoId of lookupFailed) {
+    await slackChatPost(
+      env,
+      botToken,
+      channel,
+      `⏳ Couldn't reach YouTube to check https://youtu.be/${videoId}, so it wasn't added. Post it again in a minute.`,
       threadTs,
     );
   }
@@ -222,7 +251,7 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
       threadTs,
     );
   }
-  for (const p of pl.summaries) {
+  for (const p of withNewCounts(pl, libraryAdded)) {
     const cap = p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} videos per playlist)` : "";
     const skipped = p.notMusic > 0 ? `, ${p.notMusic} skipped as not music` : "";
     await slackChatPost(
@@ -231,7 +260,9 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
       channel,
       p.added === 0 && p.notMusic > 0
         ? `🎵 Only music goes on this radio: none of the ${p.notMusic} videos in “${slackEscape(p.title)}” are music, so none were added`
-        : `🎶 ${p.added} ${p.added === 1 ? "video" : "videos"} from “${slackEscape(p.title)}” in the rotation${skipped}${cap}`,
+        : p.added === 0
+          ? `🔁 Every video in “${slackEscape(p.title)}” is already in the rotation`
+          : `🎶 ${p.added} ${p.added === 1 ? "video" : "videos"} from “${slackEscape(p.title)}” in the rotation${skipped}${cap}`,
       threadTs,
     );
   }
@@ -307,10 +338,12 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   const [metas, reads] = await Promise.all([Promise.all(ids.map((id) => fetchVideoMeta(id))), readPlaylists(playlistIds)]);
   const found: EnqueueItem[] = [];
   const unavailable: string[] = [];
+  const lookupFailed: string[] = [];
   ids.forEach((videoId, seq) => {
     const meta = metas[seq];
     if (meta) found.push({ videoId, seq, ...meta });
-    else unavailable.push(videoId);
+    else if (meta === null) unavailable.push(videoId);
+    else lookupFailed.push(videoId);
   });
   const notMusic = await nonMusicIds(env, [...found.map((i) => i.videoId), ...reads.flatMap((r) => r.playlist?.videos.map((v) => v.videoId) ?? [])]);
   const { keep: items, rejected } = splitNamed(found, notMusic);
@@ -321,9 +354,13 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
     if (rejected.length > 0 || pl.summaries.some((s) => s.notMusic > 0)) {
       return json({ error: "not_music", rejected, unavailable, playlistsFailed: pl.failed }, 422);
     }
+    // YouTube not answering is not "unplayable": the same link may work in a minute.
+    if (lookupFailed.length > 0 && unavailable.length === 0) {
+      return json({ error: "lookup_failed", unavailable, lookupFailed, playlistsFailed: pl.failed }, 503);
+    }
     // A playlist that read fine but contributed nothing (every video was named in the message already) is not a failed read.
     const error = pl.summaries.length > 0 ? "nothing_new" : "none_playable";
-    return json({ error, unavailable, playlistsFailed: pl.failed }, 422);
+    return json({ error, unavailable, lookupFailed, playlistsFailed: pl.failed }, 422);
   }
 
   // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.
@@ -334,14 +371,15 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   // No event id: a 30 s content hash used to absorb a double tap, but it also swallowed a deliberate second share of the
   // same link (play it, share it again within the window: dropped). Now a video already waiting or playing is reported as
   // alreadyQueued by enqueue itself, which covers the double tap without hiding a real re-share.
-  const { alreadyQueued } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, null, ts, items, adder, pl.items);
+  const { alreadyQueued, libraryAdded } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, null, ts, items, adder, pl.items);
   const skipped = new Set(alreadyQueued);
   return json({
     added: items.filter((i) => !skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
     alreadyQueued: items.filter((i) => skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
-    playlists: pl.summaries,
+    playlists: withNewCounts(pl, libraryAdded),
     playlistsFailed: pl.failed,
     unavailable,
+    lookupFailed,
     rejected,
   });
 }

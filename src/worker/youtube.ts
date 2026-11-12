@@ -6,9 +6,10 @@ export type VideoMeta = { title: string; author: string; thumbnailUrl: string };
 const OEMBED_TIMEOUT_MS = 4000;
 
 /**
- * oEmbed answers 401/403/404 for removed, private and embedding-disabled videos: `null`, a verdict on the video.
- * A timeout, a network error, a 429 or a 5xx says nothing about the video: `undefined`, so a caller that retires rows
- * must not retire one just because YouTube was slow. Both are falsy, so callers that only want a title can test `!meta`.
+ * oEmbed answers 400, 401, 403 and 404 for ids that do not exist and for removed, private and embedding-disabled videos
+ * (measured: a made-up id gets 400 or 404): `null`, a verdict on the video. Anything else that is not 200 (408, 429, 5xx),
+ * a timeout and a network error say nothing about the video: `undefined`, so a caller that retires rows must not retire
+ * one just because YouTube was slow. Both are falsy, so callers that only want a title can test `!meta`.
  */
 export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null | undefined> {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -16,7 +17,7 @@ export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null 
     const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`, {
       signal: AbortSignal.timeout(OEMBED_TIMEOUT_MS),
     });
-    if (res.status === 401 || res.status === 403 || res.status === 404) return null;
+    if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) return null;
     if (res.status !== 200) return undefined;
     const j = (await res.json()) as { title: string; author_name: string; thumbnail_url: string };
     return { title: j.title, author: j.author_name, thumbnailUrl: j.thumbnail_url };
@@ -51,7 +52,7 @@ const CATEGORY_NAMES: Record<string, string> = {
  * answered for, which also covers a video it returned no entry for: a deleted or private video is "answered, no category",
  * which is final, unlike a timeout or an exhausted quota where nothing about the id is known.
  */
-export type CategoryLookup = { categories: Map<string, VideoCategory>; answered: Set<string> };
+export type CategoryLookup = { categories: Map<string, VideoCategory>; answered: Set<string>; badRequest: boolean };
 
 /**
  * The category the uploader gave each video, from the official YouTube Data API (videos.list). Scraping the watch page or
@@ -64,9 +65,10 @@ export type CategoryLookup = { categories: Map<string, VideoCategory>; answered:
 export async function lookupVideoCategories(env: YouTubeEnv, videoIds: string[]): Promise<CategoryLookup> {
   const categories = new Map<string, VideoCategory>();
   const answered = new Set<string>();
+  let badRequest = false;
   const key = env.YOUTUBE_API_KEY;
   const unique = [...new Set(videoIds)];
-  if (!key || unique.length === 0) return { categories, answered };
+  if (!key || unique.length === 0) return { categories, answered, badRequest };
   const base = env.YOUTUBE_API_URL ?? "https://www.googleapis.com/youtube/v3";
   for (let i = 0; i < unique.length; i += CATEGORY_BATCH) {
     const chunk = unique.slice(i, i + CATEGORY_BATCH);
@@ -76,6 +78,9 @@ export async function lookupVideoCategories(env: YouTubeEnv, videoIds: string[])
       });
       if (res.status !== 200) {
         console.error("youtube categories", res.status);
+        // 400 means this call was malformed or carried an id YouTube refuses, so a smaller call may still be answered. Quota
+        // (403), rate limiting (429) and outages (5xx) would fail the same way, so retrying those only burns more calls.
+        if (res.status === 400) badRequest = true;
         continue;
       }
       const body = (await res.json()) as { items?: { id?: string; snippet?: { categoryId?: string } }[] };
@@ -89,7 +94,7 @@ export async function lookupVideoCategories(env: YouTubeEnv, videoIds: string[])
       console.error("youtube categories", e);
     }
   }
-  return { categories, answered };
+  return { categories, answered, badRequest };
 }
 
 /** The categories alone, for callers that only act on a positive answer. */

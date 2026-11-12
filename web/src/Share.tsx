@@ -9,6 +9,8 @@ type Result = {
   playlists?: { id: string; title: string; added: number; truncated: boolean }[];
   playlistsFailed?: string[];
   unavailable: string[];
+  /** Links YouTube did not answer for (a timeout, 429 or 5xx): not known to be unavailable, so worth another try. */
+  lookupFailed?: string[];
   rejected?: { videoId: string; category: string }[];
 };
 type Phase = { kind: "idle" } | { kind: "sending" } | { kind: "done"; result: Result } | { kind: "error"; message: string };
@@ -62,6 +64,7 @@ export function Share() {
                   : "No YouTube video in what you shared.",
         });
       }
+      if (res.status === 503) return setPhase({ kind: "error", message: "YouTube didn't answer, so nothing was checked or added. Try again in a minute." });
       if (!res.ok) return setPhase({ kind: "error", message: `Couldn't add it (${res.status}). Try again.` });
       setPhase({ kind: "done", result: (await res.json()) as Result });
     } catch {
@@ -87,8 +90,10 @@ export function Share() {
         ) : phase.kind === "done" ? (
           <>
             <p className="lcd-text">
-              {phase.result.added.length === 0 && (phase.result.alreadyQueued?.length ?? 0) > 0 && !phase.result.playlists?.length
-                ? "ALREADY IN THE QUEUE"
+              {phase.result.added.length === 0 &&
+              ((phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists?.length ?? 0) > 0) &&
+              (phase.result.playlists ?? []).every((p) => p.added === 0)
+                ? "ALREADY IN THE RADIO"
                 : "★ ADDED TO RADIO"}
             </p>
             <ul className="shared">
@@ -101,8 +106,10 @@ export function Share() {
             )}
             {phase.result.playlists?.map((p) => (
               <p key={p.id} className="dim">
-                {p.added} {p.added === 1 ? "video" : "videos"} from “{p.title}”
-                {p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} per playlist)` : ""}
+                {p.added === 0
+                  ? `“${p.title}”: every video is already in the radio`
+                  : `${p.added} ${p.added === 1 ? "video" : "videos"} from “${p.title}”`}
+                {p.added > 0 && p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} per playlist)` : ""}
               </p>
             ))}
             {(phase.result.playlistsFailed?.length ?? 0) > 0 && (
@@ -110,6 +117,9 @@ export function Share() {
             )}
             {phase.result.unavailable.length > 0 && (
               <p className="banner">{phase.result.unavailable.length} unavailable or not embeddable, skipped</p>
+            )}
+            {(phase.result.lookupFailed?.length ?? 0) > 0 && (
+              <p className="banner">{phase.result.lookupFailed!.length} couldn't be checked because YouTube didn't answer, skipped. Share again in a minute.</p>
             )}
             {(phase.result.rejected?.length ?? 0) > 0 && (
               <p className="banner">{phase.result.rejected!.length} not music, skipped</p>
