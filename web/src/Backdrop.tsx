@@ -1122,8 +1122,9 @@ function findMoon(w: number, h: number, hy: number, mr: number, portrait: boolea
   let best = { ...defaultSpot, score: visible(defaultSpot.x, defaultSpot.y) };
   // Wide screens keep the usual place whenever it is clear; the search only runs when it is not, or on a portrait screen.
   if (best.score < 1 || portrait) {
-    // The side gutters between the screen edge and the panels are a few pixels wide: a disc there is a sliver of rim, which
-    // scores well on a point count and reads as nothing. So a candidate must keep its whole disc inside the panels' span.
+    // When the panels nearly fill the width, the gutters between the screen edge and the panels are a few pixels wide: a disc
+    // there is a sliver of rim, which scores well on a point count and reads as nothing. So in that case a candidate must keep
+    // its whole disc inside the panels' span (see nearlyFull below).
     const spans = boxes.filter((b) => b.bottom > b.top && b.right - b.left > w * 0.5);
     const spanLeft = spans.length ? Math.min(...spans.map((b) => b.left)) : 0;
     const spanRight = spans.length ? Math.max(...spans.map((b) => b.right)) : w;
