@@ -501,9 +501,10 @@ export class Station extends DurableObject<Env> {
           exclude,
         )
         .toArray()[0];
-    // The music filter exists only with an API key. Subrequests per pick: up to MAX_ROWS_EXAMINED title lookups, up to
-    // MAX_CATEGORY_CALLS_PER_PICK category calls and one name lookup, 31 at the most, under the 50 Workers Free allows.
-    // Past the call cap an unchecked row simply plays: the filter fails open, it never silences the station.
+    // The music filter exists only with an API key. Subrequests per pick, worst case: MAX_ROWS_EXAMINED (20) title lookups,
+    // plus either MAX_CATEGORY_CALLS_PER_PICK (3) batched calls or one split (1 + MAX_SPLIT_LOOKUPS = 13, and no more calls
+    // after it), plus the name lookup (a token read and users.info, 2). That is 35 at the most, under the 50 Workers Free
+    // allows. Past the cap an unchecked row simply plays: the filter fails open, it never silences the station.
     const filterOn = Boolean(this.env.YOUTUBE_API_KEY);
     let categoryCalls = 0;
     for (let examined = 0; examined < MAX_ROWS_EXAMINED; examined++) {
@@ -543,7 +544,8 @@ export class Station extends DurableObject<Env> {
       }
       if (row.music === null && filterOn && categoryCalls < MAX_CATEGORY_CALLS_PER_PICK && Date.now() >= this.categoryDownUntil) {
         categoryCalls++;
-        await this.checkCategories(row.video_id);
+        // A split costs up to 1 + MAX_SPLIT_LOOKUPS subrequests, so one split uses up this pick's whole category budget.
+        if ((await this.checkCategories(row.video_id)).split) categoryCalls = MAX_CATEGORY_CALLS_PER_PICK;
         // Non-music is retired by the check, and a removal during the await also lands here. A call YouTube did not answer
         // leaves the row unchecked and alive: the filter fails open, and lookups pause (categoryDownUntil).
         const stillThere = sql.exec<{ dead: number }>("SELECT dead FROM library WHERE video_id=?", row.video_id).toArray()[0];
@@ -581,7 +583,7 @@ export class Station extends DurableObject<Env> {
    * bad one, and is marked answered-without-category (music=2) so it can never be sent in a batch again. Without that, the
    * same poisoned batch would be re-sent, and refused, on every pick.
    */
-  private async checkCategories(videoId: string): Promise<void> {
+  private async checkCategories(videoId: string): Promise<{ split: boolean }> {
     const sql = this.ctx.storage.sql;
     const others = sql
       .exec<{ video_id: string }>(
@@ -607,13 +609,14 @@ export class Station extends DurableObject<Env> {
         }
       });
       if (!anyAnswered && singles.every((one) => !one.badRequest)) this.categoryDownUntil = Date.now() + CATEGORY_RETRY_MS;
-      return;
+      return { split: true };
     }
     if (lookup.answered.size === 0) {
       this.categoryDownUntil = Date.now() + CATEGORY_RETRY_MS;
-      return;
+      return { split: false };
     }
     for (const id of lookup.answered) this.recordCategory(id, lookup.categories.get(id));
+    return { split: false };
   }
 
   /** Stores one video's verdict. `AND music IS NULL`: only rows still unchecked, so a verdict that arrived meanwhile stands. */
