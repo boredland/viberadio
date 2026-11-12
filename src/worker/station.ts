@@ -5,7 +5,7 @@ import { extractVideoIds } from "../../shared/video";
 import { botTokenFor } from "./install";
 import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
-import { fetchVideoCategories, fetchVideoMeta, isNonMusic } from "./youtube";
+import { fetchVideoMeta, isNonMusic, lookupVideoCategories } from "./youtube";
 
 type StationState = {
   teamId: string;
@@ -38,7 +38,7 @@ type LibraryRow = {
   added_by_id: string | null;
   /** Resolved display name, cached so a name is looked up once per person, not once per play. */
   added_by: string | null;
-  /** 1 = confirmed music, 0 = turned away as not music, null = not checked yet or YouTube would not say. */
+  /** 1 = music, 0 = turned away as not music, 2 = YouTube answered but gave no category (final, plays), null = not checked or not answered. */
   music: number | null;
 };
 
@@ -56,8 +56,12 @@ export type Adder = { id: string | null; name: string | null };
 const SEEN_CAP = 500;
 /** Workers Free allows 50 subrequests per invocation; stay well under. */
 const MAX_ROWS_EXAMINED = 20;
-/** See pickNext: bounds the category lookups one track pick may spend. */
-const MAX_CATEGORY_LOOKUPS_PER_PICK = 8;
+/** One videos.list call checks up to this many unchecked rows at once: 1 subrequest and 1 quota unit however many. */
+const CATEGORY_BATCH_ROWS = 50;
+/** Batched calls one track pick may spend. They share the 50-subrequest budget with the title and name lookups. */
+const MAX_CATEGORY_CALLS_PER_PICK = 3;
+/** After a call YouTube did not answer, unchecked rows play without a lookup for this long: one outage costs one timeout. */
+const CATEGORY_RETRY_MS = 60_000;
 const BACKFILL_PAGE_DELAY_MS = 1500;
 const BACKFILL_DEFAULT_RETRY_S = 60;
 /** Slack errors that retrying cannot fix. */
@@ -74,7 +78,7 @@ const PERMANENT_HISTORY_ERRORS = new Set([
 const MAX_HISTORY_FAILURES = 8;
 const FATAL_PLAYER_ERRORS = new Set([100, 101, 150]);
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
-// Short: fetchVideoMeta returns null for any failure, so a transient error must not hide a title for long.
+// Short: fetchVideoMeta returns a falsy value for a removed video and for a failed lookup alike, so a transient error must not hide a title for long.
 const TITLE_MISS_TTL_MS = 2 * 60_000;
 
 export class Station extends DurableObject<Env> {
@@ -82,6 +86,8 @@ export class Station extends DurableObject<Env> {
   /** video id -> epoch ms until which a failed title lookup is not retried; in memory, so a restart simply retries. */
   private titleMisses = new Map<string, number>();
   private advanceLock: Promise<void> | null = null;
+  /** Epoch ms before which category lookups are not tried (see CATEGORY_RETRY_MS); in memory, so a restart simply retries. */
+  private categoryDownUntil = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -163,7 +169,8 @@ export class Station extends DurableObject<Env> {
   async enqueue(
     teamId: string,
     channelId: string,
-    eventId: string,
+    /** Slack event id, for redelivery dedupe. Null skips it: web adds dedupe by queue state (alreadyQueued) instead. */
+    eventId: string | null,
     messageTs: string,
     items: EnqueueItem[],
     adder: Adder = { id: null, name: null },
@@ -172,9 +179,11 @@ export class Station extends DurableObject<Env> {
   ): Promise<{ accepted: boolean; alreadyQueued: string[] }> {
     await this.init(teamId, channelId);
     const s = this.st();
-    if (s.seenEventIds.includes(eventId)) return { accepted: false, alreadyQueued: [] };
-    s.seenEventIds.push(eventId);
-    if (s.seenEventIds.length > SEEN_CAP) s.seenEventIds.splice(0, s.seenEventIds.length - SEEN_CAP);
+    if (eventId !== null) {
+      if (s.seenEventIds.includes(eventId)) return { accepted: false, alreadyQueued: [] };
+      s.seenEventIds.push(eventId);
+      if (s.seenEventIds.length > SEEN_CAP) s.seenEventIds.splice(0, s.seenEventIds.length - SEEN_CAP);
+    }
 
     const alreadyQueued: string[] = [];
     for (const it of items) {
@@ -343,8 +352,7 @@ export class Station extends DurableObject<Env> {
    * Removes a track everywhere it would play from. The library row is marked dead (not deleted) so history rotation
    * skips it, the backfill upsert cannot resurrect it, and re-posting the link revives it, like an unplayable video.
    * Every queued copy goes too: the intent is "this video should not be on the radio", not "this one slot".
-   * Web-add event ids are forgotten as well: they dedupe by content for 30 s, which would otherwise swallow a re-add made
-   * right after fixing a mistake. Slack event ids stay, since a re-post is a new event and redelivery must still dedupe.
+   * Re-adding the video afterwards works like any add: nothing remembers the removal except the library row.
    */
   private async remove(id: string): Promise<void> {
     const s = this.st();
@@ -361,7 +369,6 @@ export class Station extends DurableObject<Env> {
     if (!inLibrary && !queued && s.current?.videoId !== videoId) return;
     this.ctx.storage.sql.exec("UPDATE library SET dead=1 WHERE video_id=?", videoId);
     s.queue = s.queue.filter((t) => t.videoId !== videoId);
-    s.seenEventIds = s.seenEventIds.filter((e) => !e.startsWith("web-"));
     await this.persist();
     // By video, not slot: removing a queued copy of what is playing right now must stop it too.
     if (s.current?.videoId === videoId) await this.advance(s.current.id);
@@ -485,9 +492,11 @@ export class Station extends DurableObject<Env> {
           exclude,
         )
         .toArray()[0];
-    // Category lookups allowed in one pick: with the title and name lookups each row can cost three subrequests, and the
-    // Workers Free plan allows 50 per invocation. Past the cap an unchecked row simply plays (the filter fails open).
-    let categoryLookups = 0;
+    // The music filter exists only with an API key. Subrequests per pick: up to MAX_ROWS_EXAMINED title lookups, up to
+    // MAX_CATEGORY_CALLS_PER_PICK category calls and one name lookup, 31 at the most, under the 50 Workers Free allows.
+    // Past the call cap an unchecked row simply plays: the filter fails open, it never silences the station.
+    const filterOn = Boolean(this.env.YOUTUBE_API_KEY);
+    let categoryCalls = 0;
     for (let examined = 0; examined < MAX_ROWS_EXAMINED; examined++) {
       let row = draw(prevVideoId ?? "");
       if (!row) {
@@ -501,33 +510,35 @@ export class Station extends DurableObject<Env> {
       let { title, author, thumbnail_url: thumbnailUrl } = row;
       if (title === null) {
         const meta = await fetchVideoMeta(row.video_id);
-        if (!meta) {
+        if (meta === null) {
           // `AND title IS NULL`: a re-post during the lookup revived the row and may have titled it; do not kill that.
           sql.exec("UPDATE library SET dead=1 WHERE video_id=? AND title IS NULL", row.video_id);
           continue;
         }
-        ({ title, author, thumbnailUrl } = meta);
-        sql.exec(
-          "UPDATE library SET title=?, author=?, thumbnail_url=? WHERE video_id=?",
-          title,
-          author,
-          thumbnailUrl,
-          row.video_id,
-        );
+        if (meta) {
+          ({ title, author, thumbnailUrl } = meta);
+          sql.exec(
+            "UPDATE library SET title=?, author=?, thumbnail_url=? WHERE video_id=?",
+            title,
+            author,
+            thumbnailUrl,
+            row.video_id,
+          );
+        }
+        // `undefined`: YouTube did not answer (timeout, 429, 5xx). That says nothing about the video, so the row plays
+        // untitled and is titled on a later pass, rather than being retired for a slow lookup.
       }
       if (row.music === 0) {
         sql.exec("UPDATE library SET dead=1 WHERE video_id=?", row.video_id);
         continue;
       }
-      if (row.music === null && categoryLookups < MAX_CATEGORY_LOOKUPS_PER_PICK) {
-        categoryLookups++;
-        const category = (await fetchVideoCategories(this.env, [row.video_id])).get(row.video_id);
-        if (isNonMusic(category)) {
-          sql.exec("UPDATE library SET music=0, dead=1 WHERE video_id=?", row.video_id);
-          continue;
-        }
-        // Only a positive answer is remembered; no answer (no key, quota used up, a timeout) is retried next time.
-        if (category !== undefined) sql.exec("UPDATE library SET music=1 WHERE video_id=?", row.video_id);
+      if (row.music === null && filterOn && categoryCalls < MAX_CATEGORY_CALLS_PER_PICK && Date.now() >= this.categoryDownUntil) {
+        categoryCalls++;
+        await this.checkCategories(row.video_id);
+        // Non-music is retired by the check, and a removal during the await also lands here. A call YouTube did not answer
+        // leaves the row unchecked and alive: the filter fails open, and lookups pause (categoryDownUntil).
+        const stillThere = sql.exec<{ dead: number }>("SELECT dead FROM library WHERE video_id=?", row.video_id).toArray()[0];
+        if (!stillThere || stillThere.dead === 1) continue;
       }
       // Every await above (the title lookup, the name lookup) lets other events run, and `current` is null while an advance
       // is in flight, so a removal in that window had nothing else to stop: it marks the row dead and this track would
@@ -548,6 +559,31 @@ export class Station extends DurableObject<Env> {
       };
     }
     return null;
+  }
+
+  /**
+   * Checks the category of `videoId` and of up to CATEGORY_BATCH_ROWS - 1 other unchecked rows in ONE videos.list call, so
+   * a big backfilled library is cleared a batch at a time instead of one subrequest per row. A non-music video is retired;
+   * music is remembered; "answered, no category" (a deleted or private video) is remembered too, as final. A call YouTube
+   * did not answer changes nothing and pauses lookups for CATEGORY_RETRY_MS.
+   */
+  private async checkCategories(videoId: string): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const others = sql
+      .exec<{ video_id: string }>("SELECT video_id FROM library WHERE dead=0 AND music IS NULL AND video_id != ? LIMIT ?", videoId, CATEGORY_BATCH_ROWS - 1)
+      .toArray()
+      .map((r) => r.video_id);
+    const { categories, answered } = await lookupVideoCategories(this.env, [videoId, ...others]);
+    if (answered.size === 0) {
+      this.categoryDownUntil = Date.now() + CATEGORY_RETRY_MS;
+      return;
+    }
+    for (const id of answered) {
+      const category = categories.get(id);
+      // `AND music IS NULL`: only rows still unchecked, so a verdict that arrived while this call was in flight stands.
+      if (isNonMusic(category)) sql.exec("UPDATE library SET music=0, dead=1 WHERE video_id=? AND music IS NULL", id);
+      else sql.exec("UPDATE library SET music=? WHERE video_id=? AND music IS NULL", category ? 1 : 2, id);
+    }
   }
 
   // ---- Backfill -----------------------------------------------------------

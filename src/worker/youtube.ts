@@ -2,16 +2,26 @@ import { MAX_PLAYLIST_VIDEOS } from "../../shared/video";
 
 export type VideoMeta = { title: string; author: string; thumbnailUrl: string };
 
-/** oEmbed answers non-200 for removed, private and embedding-disabled videos. */
-export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null> {
+/** Short for the same reason as CATEGORY_TIMEOUT_MS: a hung lookup must not hold up an add or a track advance. */
+const OEMBED_TIMEOUT_MS = 4000;
+
+/**
+ * oEmbed answers 401/403/404 for removed, private and embedding-disabled videos: `null`, a verdict on the video.
+ * A timeout, a network error, a 429 or a 5xx says nothing about the video: `undefined`, so a caller that retires rows
+ * must not retire one just because YouTube was slow. Both are falsy, so callers that only want a title can test `!meta`.
+ */
+export async function fetchVideoMeta(videoId: string): Promise<VideoMeta | null | undefined> {
   const url = `https://www.youtube.com/watch?v=${videoId}`;
   try {
-    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
-    if (res.status !== 200) return null;
+    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`, {
+      signal: AbortSignal.timeout(OEMBED_TIMEOUT_MS),
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 404) return null;
+    if (res.status !== 200) return undefined;
     const j = (await res.json()) as { title: string; author_name: string; thumbnail_url: string };
     return { title: j.title, author: j.author_name, thumbnailUrl: j.thumbnail_url };
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -37,16 +47,26 @@ const CATEGORY_NAMES: Record<string, string> = {
 };
 
 /**
+ * What a category lookup learned. `categories` holds the ids the API gave a category for. `answered` holds every id it
+ * answered for, which also covers a video it returned no entry for: a deleted or private video is "answered, no category",
+ * which is final, unlike a timeout or an exhausted quota where nothing about the id is known.
+ */
+export type CategoryLookup = { categories: Map<string, VideoCategory>; answered: Set<string> };
+
+/**
  * The category the uploader gave each video, from the official YouTube Data API (videos.list). Scraping the watch page or
  * the player endpoint does not work from Cloudflare: YouTube answers those with 429 or "sign in to confirm you're not a
- * bot". Only videos the API answered for are in the result, so an absent id means "unknown", never "not music": no key,
- * an exhausted quota, a timeout and a private video all leave the map without that id, and the filter then lets it through.
+ * bot". Only videos the API answered for are in `categories`, so an absent id means "unknown", never "not music": no key,
+ * an exhausted quota, a timeout and a private video all leave `categories` without that id, and the filter then lets it
+ * through. An id is in `answered` only when its whole batch came back with a 200, so callers can tell a final "no
+ * category" from a failed call.
  */
-export async function fetchVideoCategories(env: YouTubeEnv, videoIds: string[]): Promise<Map<string, VideoCategory>> {
-  const out = new Map<string, VideoCategory>();
+export async function lookupVideoCategories(env: YouTubeEnv, videoIds: string[]): Promise<CategoryLookup> {
+  const categories = new Map<string, VideoCategory>();
+  const answered = new Set<string>();
   const key = env.YOUTUBE_API_KEY;
   const unique = [...new Set(videoIds)];
-  if (!key || unique.length === 0) return out;
+  if (!key || unique.length === 0) return { categories, answered };
   const base = env.YOUTUBE_API_URL ?? "https://www.googleapis.com/youtube/v3";
   for (let i = 0; i < unique.length; i += CATEGORY_BATCH) {
     const chunk = unique.slice(i, i + CATEGORY_BATCH);
@@ -59,16 +79,22 @@ export async function fetchVideoCategories(env: YouTubeEnv, videoIds: string[]):
         continue;
       }
       const body = (await res.json()) as { items?: { id?: string; snippet?: { categoryId?: string } }[] };
+      for (const id of chunk) answered.add(id);
       for (const item of body.items ?? []) {
         const id = item.id;
         const cat = item.snippet?.categoryId;
-        if (id && cat) out.set(id, { id: cat, name: CATEGORY_NAMES[cat] ?? `category ${cat}` });
+        if (id && cat) categories.set(id, { id: cat, name: CATEGORY_NAMES[cat] ?? `category ${cat}` });
       }
     } catch (e) {
       console.error("youtube categories", e);
     }
   }
-  return out;
+  return { categories, answered };
+}
+
+/** The categories alone, for callers that only act on a positive answer. */
+export async function fetchVideoCategories(env: YouTubeEnv, videoIds: string[]): Promise<Map<string, VideoCategory>> {
+  return (await lookupVideoCategories(env, videoIds)).categories;
 }
 
 /** True only for a video the API said is in a category other than Music. Unknown (no entry) is not enough to turn it away. */

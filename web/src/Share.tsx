@@ -10,8 +10,6 @@ type Result = {
   playlistsFailed?: string[];
   unavailable: string[];
   rejected?: { videoId: string; category: string }[];
-  /** True when the server dropped this request as a re-delivery of one it had just queued. */
-  duplicate?: boolean;
 };
 type Phase = { kind: "idle" } | { kind: "sending" } | { kind: "done"; result: Result } | { kind: "error"; message: string };
 
@@ -89,8 +87,7 @@ export function Share() {
         ) : phase.kind === "done" ? (
           <>
             <p className="lcd-text">
-              {phase.result.duplicate ||
-              (phase.result.added.length === 0 && (phase.result.alreadyQueued?.length ?? 0) > 0 && !phase.result.playlists?.length)
+              {phase.result.added.length === 0 && (phase.result.alreadyQueued?.length ?? 0) > 0 && !phase.result.playlists?.length
                 ? "ALREADY IN THE QUEUE"
                 : "★ ADDED TO RADIO"}
             </p>
@@ -102,7 +99,7 @@ export function Share() {
             {(phase.result.alreadyQueued?.length ?? 0) > 0 && (
               <p className="dim">{phase.result.alreadyQueued!.length} already in the queue or playing, not queued again</p>
             )}
-            {!phase.result.duplicate && phase.result.playlists?.map((p) => (
+            {phase.result.playlists?.map((p) => (
               <p key={p.id} className="dim">
                 {p.added} {p.added === 1 ? "video" : "videos"} from “{p.title}”
                 {p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} per playlist)` : ""}

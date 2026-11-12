@@ -46,7 +46,15 @@ const shimmerGain = (audio: Drive | null): number => 1 + 1.0 * (audio?.treble ??
  * belongs to the painter, so a resize starts it fresh.
  */
 type Painter = (ctx: CanvasRenderingContext2D, t: number, audio: Drive | null) => void;
-type Scene = (w: number, h: number) => Painter;
+/**
+ * State a scene advances with time. It is kept outside the scene's closure because a resize rebuilds the closure, and state
+ * held inside would restart from its seed on every resize (a loud moment then makes the whole scene jump).
+ */
+type SceneMemory = Record<string, unknown>;
+type Scene = (w: number, h: number, mem: SceneMemory) => Painter;
+type RingState = { rings: number[]; lastRing: number; prevBass: number };
+type FallState = { lastGust: number; prevBass: number; gust: number; heights: number[]; lastT: number };
+type SnowState = FallState & { auroraPhase: number; lastAuroraT: number; auroraPulse: number };
 
 const HORIZON = 0.64;
 const GRID_ROWS = 14;
@@ -426,7 +434,7 @@ const LOGO_PATHS = {
  *  - Without it the wall breathes in a slow diagonal wave and the logo rests, so the backdrop stays mute.
  * Reduced motion paints one still frame of the resting state.
  */
-const kivoScene: Scene = (w, h) => {
+const kivoScene: Scene = (w, h, mem) => {
   const paths = {
     k: new Path2D(LOGO_PATHS.k),
     v: new Path2D(LOGO_PATHS.v),
@@ -445,9 +453,9 @@ const kivoScene: Scene = (w, h) => {
   const y0 = (h - (rows * step - gap)) / 2;
   const logoH = Math.min(w, h) * 0.3;
   const plate = logoH * 1.3;
-  const rings: number[] = [];
-  let lastRing = -Infinity;
-  let prevBass = 0;
+  // Ring state outlives this closure (see RingState): a resize must not drop the shockwaves in flight.
+  const st = (mem.state ??= { rings: [], lastRing: -Infinity, prevBass: 0 }) as RingState;
+  const rings = st.rings;
 
   const tile = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
     ctx.beginPath();
@@ -497,12 +505,12 @@ const kivoScene: Scene = (w, h) => {
     }
 
     // Shockwaves on a bass hit: thin rounded squares travelling outward from the logo plate.
-    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastRing > 220) {
+    if (audio && audio.bass > 0.12 && audio.bass > st.prevBass + 0.03 && t - st.lastRing > 220) {
       rings.push(t);
-      lastRing = t;
+      st.lastRing = t;
       if (rings.length > 6) rings.shift();
     }
-    prevBass = audio?.bass ?? 0;
+    st.prevBass = audio?.bass ?? 0;
     const reach = Math.max(w, h) * 0.75;
     for (let i = rings.length - 1; i >= 0; i--) {
       const age = (t - rings[i]) / 1400;
@@ -585,7 +593,7 @@ const EMPA_GEM_OUTLINE = [0, 1, 3, 5, 4, 2] as const;
  *    bass, and a kick sends a ripple across the slab's plane.
  *  - Without it the dots breathe slowly and the pixels drift, so the backdrop stays mute. Reduced motion paints one still frame.
  */
-const empaScene: Scene = (w, h) => {
+const empaScene: Scene = (w, h, mem) => {
   const gap = Math.max(22, Math.min(34, w / 44));
   const cols = Math.ceil(w / gap) + 1;
   const rows = Math.ceil(h / gap) + 1;
@@ -595,9 +603,9 @@ const empaScene: Scene = (w, h) => {
   const side = plate / Math.SQRT2;
   // Rings are measured on the slab's plane (flattened to half height) from its edge outward.
   const reach = Math.hypot(Math.max(cx, w - cx), 2 * Math.max(cy, h - cy)) - plate / 2;
-  const rings: number[] = [];
-  let lastRing = -Infinity;
-  let prevBass = 0;
+  // Ring state outlives this closure (see RingState): a resize must not drop the ripples in flight.
+  const st = (mem.state ??= { rings: [], lastRing: -Infinity, prevBass: 0 }) as RingState;
+  const rings = st.rings;
 
   const iso = (ctx: CanvasRenderingContext2D, s: number, dy: number) => {
     ctx.save();
@@ -658,12 +666,12 @@ const empaScene: Scene = (w, h) => {
     }
 
     // Ripples across the slab's plane on a bass hit.
-    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastRing > 220) {
+    if (audio && audio.bass > 0.12 && audio.bass > st.prevBass + 0.03 && t - st.lastRing > 220) {
       rings.push(t);
-      lastRing = t;
+      st.lastRing = t;
       if (rings.length > 6) rings.shift();
     }
-    prevBass = audio?.bass ?? 0;
+    st.prevBass = audio?.bass ?? 0;
     for (let i = rings.length - 1; i >= 0; i--) {
       const age = (t - rings[i]) / 1500;
       if (age >= 1) {
@@ -773,15 +781,13 @@ const TREES = (() => {
  *    quicker. The trees sway and flare on the bass and the sun swells with it, and a kick throws a gust of extra leaves.
  *  - Without it the leaves drift slowly and the trees stand still, so the backdrop stays mute. Reduced motion paints one still frame.
  */
-const autumnScene: Scene = (w, h) => {
+const autumnScene: Scene = (w, h, mem) => {
   const hy = h * 0.72;
-  let lastGust = -Infinity;
-  let prevBass = 0;
-  let gust = 0;
+  // Time-advancing state lives in `mem`, not in this closure: a resize rebuilds the scene, and anything kept here would
+  // restart from its seed (every leaf back at its seeded height) and visibly jump.
   // Each leaf's height is advanced a frame at a time. Computing it as fall x time x speed made every change in a band's
   // level rescale the whole elapsed time, so leaves jumped across the screen whenever the music got louder or quieter.
-  const heights = LEAVES.map((l) => l.y);
-  let lastT = -1;
+  const st = (mem.state ??= { lastGust: -Infinity, prevBass: 0, gust: 0, heights: LEAVES.map((l) => l.y), lastT: -1 }) as FallState;
 
   const leaf = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number, angle: number, rgb: string, alpha: number) => {
     ctx.save();
@@ -844,15 +850,17 @@ const autumnScene: Scene = (w, h) => {
     }
 
     // A kick throws a gust: the leaves are pushed sideways for a moment, then settle.
-    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastGust > 260) {
-      gust = 1;
-      lastGust = t;
+    if (audio && audio.bass > 0.12 && audio.bass > st.prevBass + 0.03 && t - st.lastGust > 260) {
+      st.gust = 1;
+      st.lastGust = t;
     }
-    prevBass = audio?.bass ?? 0;
-    gust *= 0.94;
+    st.prevBass = audio?.bass ?? 0;
+    st.gust *= 0.94;
+    const gust = st.gust;
+    const heights = st.heights;
 
-    const dt = lastT < 0 ? 0 : Math.min(100, Math.max(0, t - lastT));
-    lastT = t;
+    const dt = st.lastT < 0 ? 0 : Math.min(100, Math.max(0, t - st.lastT));
+    st.lastT = t;
     for (let i = 0; i < LEAVES.length; i++) {
       const l = LEAVES[i];
       const level = bands ? bands[l.band] : 0;
@@ -1069,21 +1077,27 @@ function drawSanta(ctx: CanvasRenderingContext2D, t: number, glow: number): void
  *  - From 1 to 26 December, Santa's sleigh crosses the sky now and then, glowing a little more on a kick. It needs the
  *    animation clock, so under reduced motion he never appears.
  */
-const snowScene: Scene = (w, h) => {
+const snowScene: Scene = (w, h, mem) => {
   const hy = h * 0.7;
-  let lastGust = -Infinity;
-  let prevBass = 0;
-  let gust = 0;
+  // Everything that advances with time lives in `mem`, which outlives this closure: a resize rebuilds the scene, and state
+  // kept here would restart (aurora phase and pulse at 0, flakes back at their seeded heights) and visibly jump.
   // Heights are advanced a frame at a time, so a change in a band's loudness changes the speed instead of teleporting the
   // flake (computing height as fall x time x speed rescaled all elapsed time on every level change).
-  const heights = FLAKES.map((f) => f.y);
-  let lastT = -1;
-  let auroraPhase = 0;
-  let lastAuroraT = -1;
-  let auroraPulse = 0;
+  const st = (mem.state ??= {
+    lastGust: -Infinity,
+    prevBass: 0,
+    gust: 0,
+    heights: FLAKES.map((f) => f.y),
+    lastT: -1,
+    auroraPhase: 0,
+    lastAuroraT: -1,
+    auroraPulse: 0,
+  }) as SnowState;
 
-  // Where the moon can be seen on a portrait screen: the middle of the widest stretch no pine covers. Each pine hides
-  // its widest tier (0.3 of its height to each side), so that is the span to keep clear, measured at this screen size.
+  const mr = Math.min(w, h) * 0.045;
+  // Where the moon is not hidden by a pine: the middle of the widest stretch no pine covers. Each pine hides its widest
+  // tier (0.3 of its height to each side), so that is the span to keep clear, measured at this screen size. On a phone the
+  // panels (HTML, not part of this canvas) can still cover the sky: with the LOOK window folded the moon is fully visible.
   const moonX = (() => {
     const spans = PINES.map((p) => {
       const half = h * p.height * (p.layer === 0 ? 1 : 1.4) * 0.3;
@@ -1149,12 +1163,14 @@ const snowScene: Scene = (w, h) => {
     // The ripple phase is advanced a frame at a time: writing it as (t / 2600) * speed multiplied ALL elapsed time by the
     // current speed, so every change in the mids made the ribbons jump instead of just speeding up.
     const mids = bands ? (bands[5] + bands[8] + bands[11]) / 3 : 0;
-    const adt = lastAuroraT < 0 ? 0 : Math.min(100, Math.max(0, t - lastAuroraT));
-    lastAuroraT = t;
-    auroraPhase += (adt / 2600) * (1 + 2.2 * mids);
+    const adt = st.lastAuroraT < 0 ? 0 : Math.min(100, Math.max(0, t - st.lastAuroraT));
+    st.lastAuroraT = t;
+    st.auroraPhase += (adt / 2600) * (1 + 2.2 * mids);
     // The raw bass pulse steps from ~0 to 1 in one frame on a kick, which snapped the ribbons by ~2% of the height.
     // Ease it (attack ~60 ms, release ~350 ms) so a kick swells them instead.
-    auroraPulse += (pulse - auroraPulse) * (1 - Math.exp(-adt / (pulse > auroraPulse ? 60 : 350)));
+    st.auroraPulse += (pulse - st.auroraPulse) * (1 - Math.exp(-adt / (pulse > st.auroraPulse ? 60 : 350)));
+    const auroraPhase = st.auroraPhase;
+    const auroraPulse = st.auroraPulse;
     for (let k = 0; k < 3; k++) {
       const baseY = hy * (0.2 + k * 0.11);
       const amp = h * (0.035 + 0.02 * auroraPulse + 0.015 * mids);
@@ -1175,12 +1191,9 @@ const snowScene: Scene = (w, h) => {
       ctx.fill();
     }
 
-    // Moon with a halo.
-    // The panels cover the top of the page. Wide screens have room low-left of centre. On a portrait screen the panels
-    // reach almost down to the horizon and the pines are drawn over the moon, so it rises on the ridge in the widest gap
-    // between pines (see moonX), the only place left where it can be seen.
+    // Moon with a halo. Wide screens have room low-left of centre. On a portrait screen the pines are drawn over the moon, so
+    // it rises on the ridge in the widest gap between them (see moonX).
     const portrait = w < h;
-    const mr = Math.min(w, h) * 0.045;
     const mx = portrait ? moonX : w * 0.12;
     const my = portrait ? hy - h * 0.03 - mr * 0.4 : hy * 0.62;
     const halo = ctx.createRadialGradient(mx, my, mr * 0.5, mx, my, mr * 5);
@@ -1253,15 +1266,17 @@ const snowScene: Scene = (w, h) => {
     ctx.restore();
 
     // A kick throws a gust that sweeps the snow sideways, then settles.
-    if (audio && audio.bass > 0.12 && audio.bass > prevBass + 0.03 && t - lastGust > 260) {
-      gust = 1;
-      lastGust = t;
+    if (audio && audio.bass > 0.12 && audio.bass > st.prevBass + 0.03 && t - st.lastGust > 260) {
+      st.gust = 1;
+      st.lastGust = t;
     }
-    prevBass = audio?.bass ?? 0;
-    gust *= 0.94;
+    st.prevBass = audio?.bass ?? 0;
+    st.gust *= 0.94;
+    const gust = st.gust;
+    const heights = st.heights;
 
-    const dt = lastT < 0 ? 0 : Math.min(100, Math.max(0, t - lastT));
-    lastT = t;
+    const dt = st.lastT < 0 ? 0 : Math.min(100, Math.max(0, t - st.lastT));
+    st.lastT = t;
     for (let i = 0; i < FLAKES.length; i++) {
       const f = FLAKES[i];
       const level = bands ? bands[f.band] : 0;
@@ -1297,6 +1312,12 @@ export function Backdrop() {
 
 function CanvasBackdrop({ bg, theme }: { bg: BackgroundId; theme: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  // One bag of state per scene, outliving the effect: a resize or a theme change rebuilds the scene, and state held in the
+  // scene's own closure would restart from its seed and visibly jump.
+  const memory = useRef<Record<string, SceneMemory>>({});
+  // The last animation-frame time. A rebuild repaints at this time, not at 0: scenes keep their own clock, and a repaint at 0
+  // would set it back and make the next frame look like a 100 ms gap.
+  const lastFrameT = useRef(0);
 
   // `theme` is a dependency because the scenes read the theme's colours when they paint: a new theme needs a new frame.
   useEffect(() => {
@@ -1323,8 +1344,8 @@ function CanvasBackdrop({ bg, theme }: { bg: BackgroundId; theme: string }) {
       el.width = Math.round(w * dpr);
       el.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      painter = SCENES[bg](w, h);
-      draw(0);
+      painter = SCENES[bg](w, h, (memory.current[bg] ??= {}));
+      draw(lastFrameT.current);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -1335,6 +1356,7 @@ function CanvasBackdrop({ bg, theme }: { bg: BackgroundId; theme: string }) {
       raf = requestAnimationFrame(frame);
       if (t - last < 33) return;
       last = t;
+      lastFrameT.current = t;
       draw(t);
     };
     if (!calm) raf = requestAnimationFrame(frame);

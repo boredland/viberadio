@@ -186,12 +186,14 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   const adder = { id: event.user ?? null, name: await resolveSlackName(env, teamId, event.user) };
   const { accepted, alreadyQueued } = await env.STATION.getByName(token).enqueue(teamId, channel, body.event_id, event.ts, split.keep, adder, pl.items);
   if (!accepted) return;
-  const added = split.keep.length > 0 || pl.items.length > 0;
+  // Headphones only when something was actually queued. A message whose every link was already waiting or playing is
+  // answered by the "already in the queue" reply below, and a headphones reaction would say it was added.
+  const queuedNew = split.keep.some((i) => !alreadyQueued.includes(i.videoId)) || pl.items.length > 0;
   const turnedAway = split.rejected.length > 0 || pl.summaries.some((p) => p.notMusic > 0);
   // A mixed message gets the headphones (its music is in) and a reply naming what was skipped; only a message with no
   // music at all gets the cross. A message that failed for another reason (unavailable video) gets neither, as before.
-  if (added) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
-  else if (turnedAway) await slackReact(env, botToken, channel, event.ts, REJECT_REACTION);
+  if (queuedNew) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
+  else if (turnedAway && alreadyQueued.length === 0) await slackReact(env, botToken, channel, event.ts, REJECT_REACTION);
   for (const videoId of unavailable) {
     await slackChatPost(
       env,
@@ -327,19 +329,13 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
   // Slack ts format (fixed-width seconds + fraction) so the history ordering treats web adds like channel posts.
   const now = Date.now();
   const ts = `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, "0")}000`;
-  // Same links within the same 30 s window share an event id, so enqueue's dedupe absorbs a double tap or a retry.
-  // Without it each request would mint a fresh id and queue the same video twice.
-  const window30 = Math.floor(now / 30_000);
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`${window30}:${items.map((i) => i.videoId).join(",")}:${playlistIds.join(",")}`),
-  );
-  const eventId = `web-${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
   // The share target has no identity, so it is credited to the label "web share" instead of a person.
   const adder = { id: "web", name: WEB_ADDER };
-  const { accepted, alreadyQueued } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, eventId, ts, items, adder, pl.items);
-  // A rejected (re-delivered) request means these same links were just queued by the first copy, so nothing is new.
-  const skipped = accepted ? new Set(alreadyQueued) : new Set(items.map((i) => i.videoId));
+  // No event id: a 30 s content hash used to absorb a double tap, but it also swallowed a deliberate second share of the
+  // same link (play it, share it again within the window: dropped). Now a video already waiting or playing is reported as
+  // alreadyQueued by enqueue itself, which covers the double tap without hiding a real re-share.
+  const { alreadyQueued } = await env.STATION.getByName(token).enqueue(info.teamId, info.channelId, null, ts, items, adder, pl.items);
+  const skipped = new Set(alreadyQueued);
   return json({
     added: items.filter((i) => !skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
     alreadyQueued: items.filter((i) => skipped.has(i.videoId)).map((i) => ({ videoId: i.videoId, title: i.title })),
@@ -347,7 +343,6 @@ async function addFromWeb(request: Request, env: Env, token: string): Promise<Re
     playlistsFailed: pl.failed,
     unavailable,
     rejected,
-    duplicate: !accepted,
   });
 }
 
