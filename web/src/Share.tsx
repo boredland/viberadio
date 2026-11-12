@@ -6,7 +6,7 @@ import { Win } from "./ui";
 type Result = {
   added: { videoId: string; title: string }[];
   alreadyQueued?: { videoId: string; title: string }[];
-  playlists?: { id: string; title: string; added: number; truncated: boolean }[];
+  playlists?: { id: string; title: string; added: number; truncated: boolean; notMusic: number }[];
   playlistsFailed?: string[];
   unavailable: string[];
   /** Links YouTube did not answer for (a timeout, 429 or 5xx): not known to be unavailable, so worth another try. */
@@ -92,7 +92,9 @@ export function Share() {
             <p className="lcd-text">
               {phase.result.added.length === 0 &&
               ((phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists?.length ?? 0) > 0) &&
-              (phase.result.playlists ?? []).every((p) => p.added === 0)
+              (phase.result.playlists ?? []).every((p) => p.added === 0) &&
+              // Skipped as not music is a different answer from already there, and the line under it says which.
+              (phase.result.playlists ?? []).every((p) => p.notMusic === 0)
                 ? "ALREADY ON THE RADIO"
                 : "★ ADDED TO RADIO"}
             </p>
@@ -106,9 +108,11 @@ export function Share() {
             )}
             {phase.result.playlists?.map((p) => (
               <p key={p.id} className="dim">
-                {p.added === 0
-                  ? `“${p.title}”: every video is already on the radio`
-                  : `${p.added} ${p.added === 1 ? "video" : "videos"} from “${p.title}”`}
+                {p.added === 0 && p.notMusic > 0
+                  ? `“${p.title}”: none of its ${p.notMusic} videos are music, so none were added`
+                  : p.added === 0
+                    ? `“${p.title}”: every video is already on the radio`
+                    : `${p.added} ${p.added === 1 ? "video" : "videos"} from “${p.title}”${p.notMusic > 0 ? `, ${p.notMusic} skipped as not music` : ""}`}
                 {p.added > 0 && p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} per playlist)` : ""}
               </p>
             ))}

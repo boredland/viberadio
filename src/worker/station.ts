@@ -595,7 +595,12 @@ export class Station extends DurableObject<Env> {
       .toArray()
       .map((r) => r.video_id);
     const lookup = await lookupVideoCategories(this.env, [videoId, ...others]);
-    if (lookup.answered.size === 0 && lookup.badRequest && others.length > 0) {
+    if (lookup.answered.size === 0 && lookup.badRequest && others.length === 0) {
+      // The call was already for this one id, so a repeat would just be refused again: it is the bad one.
+      sql.exec("UPDATE library SET music=2 WHERE video_id=? AND music IS NULL", videoId);
+      return { split: false };
+    }
+    if (lookup.answered.size === 0 && lookup.badRequest) {
       const ids = [videoId, ...others].slice(0, MAX_SPLIT_LOOKUPS);
       const singles = await Promise.all(ids.map((id) => lookupVideoCategories(this.env, [id])));
       let anyAnswered = false;
