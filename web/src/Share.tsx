@@ -6,7 +6,7 @@ import { Win } from "./ui";
 type Result = {
   added: { videoId: string; title: string }[];
   alreadyQueued?: { videoId: string; title: string }[];
-  playlists?: { id: string; title: string; added: number; truncated: boolean; notMusic: number }[];
+  playlists?: { id: string; title: string; added: number; alreadyThere: number; truncated: boolean; notMusic: number }[];
   playlistsFailed?: string[];
   unavailable: string[];
   /** Links YouTube did not answer for (a timeout, 429 or 5xx): not known to be unavailable, so worth another try. */
@@ -93,7 +93,7 @@ export function Share() {
               {phase.result.added.length > 0 || (phase.result.playlists ?? []).some((p) => p.added > 0)
                 ? "★ ADDED TO RADIO"
                 : // Nothing new went in. Already there, or skipped as not music: the lines below name which.
-                  (phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists ?? []).some((p) => p.notMusic === 0)
+                  (phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists ?? []).some((p) => p.alreadyThere > 0 || p.notMusic === 0)
                   ? "ALREADY ON THE RADIO"
                   : "NOTHING ADDED"}
             </p>
@@ -107,10 +107,10 @@ export function Share() {
             )}
             {phase.result.playlists?.map((p) => (
               <p key={p.id} className="dim">
-                {p.added === 0 && p.notMusic > 0
+                {p.added === 0 && p.alreadyThere === 0 && p.notMusic > 0
                   ? `“${p.title}”: none of its ${p.notMusic} videos are music, so none were added`
                   : p.added === 0
-                    ? `“${p.title}”: every video is already on the radio`
+                    ? `“${p.title}”: every music video is already on the radio${p.notMusic > 0 ? `, ${p.notMusic} skipped as not music` : ""}`
                     : `${p.added} ${p.added === 1 ? "video" : "videos"} from “${p.title}”${p.notMusic > 0 ? `, ${p.notMusic} skipped as not music` : ""}`}
                 {p.added > 0 && p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} per playlist)` : ""}
               </p>

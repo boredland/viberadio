@@ -140,10 +140,12 @@ function withNewCounts(pl: ReturnType<typeof playlistItems>, libraryAdded: strin
   // Each playlist's items are consecutive, in summary order, so walk them in step with the summaries.
   let cursor = 0;
   return pl.summaries.map((s) => {
+    // `s.added` is what the feed offered that is music and not named in the message; `added` is how many of those the station
+    // did not already have.
     let added = 0;
     for (let k = 0; k < s.added; k++) if (fresh.has(pl.items[cursor + k].videoId)) added++;
     cursor += s.added;
-    return { ...s, added };
+    return { ...s, added, alreadyThere: s.added - added };
   });
 }
 
@@ -210,10 +212,12 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   // answered by the "already in the queue" reply below, and a headphones reaction would say it was added.
   const queuedNew = split.keep.some((i) => !alreadyQueued.includes(i.videoId)) || libraryAdded.length > 0;
   const turnedAway = split.rejected.length > 0 || pl.summaries.some((p) => p.notMusic > 0);
+  // Some of the message was music and is already on the radio (a queued link, or a playlist's music videos): not a rejection.
+  const alreadyThere = alreadyQueued.length > 0 || withNewCounts(pl, libraryAdded).some((p) => p.alreadyThere > 0);
   // A mixed message gets the headphones (its music is in) and a reply naming what was skipped; only a message with no
   // music at all gets the cross. A message that failed for another reason (unavailable video) gets neither, as before.
   if (queuedNew) await slackReact(env, botToken, channel, event.ts, ACK_REACTION);
-  else if (turnedAway && alreadyQueued.length === 0) await slackReact(env, botToken, channel, event.ts, REJECT_REACTION);
+  else if (turnedAway && !alreadyThere) await slackReact(env, botToken, channel, event.ts, REJECT_REACTION);
   for (const videoId of unavailable) {
     await slackChatPost(
       env,
@@ -254,15 +258,16 @@ async function handleEvent(body: SlackEventBody, origin: string, env: Env): Prom
   for (const p of withNewCounts(pl, libraryAdded)) {
     const cap = p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} videos per playlist)` : "";
     const skipped = p.notMusic > 0 ? `, ${p.notMusic} skipped as not music` : "";
+    const title = slackEscape(p.title);
     await slackChatPost(
       env,
       botToken,
       channel,
-      p.added === 0 && p.notMusic > 0
-        ? `🎵 Only music goes on this radio: none of the ${p.notMusic} videos in “${slackEscape(p.title)}” are music, so none were added`
+      p.added === 0 && p.alreadyThere === 0 && p.notMusic > 0
+        ? `🎵 Only music goes on this radio: none of the ${p.notMusic} videos in “${title}” are music, so none were added`
         : p.added === 0
-          ? `🔁 Every video in “${slackEscape(p.title)}” is already in the rotation`
-          : `🎶 ${p.added} ${p.added === 1 ? "video" : "videos"} from “${slackEscape(p.title)}” in the rotation${skipped}${cap}`,
+          ? `🔁 Every music video in “${title}” is already in the rotation${skipped}`
+          : `🎶 ${p.added} ${p.added === 1 ? "video" : "videos"} from “${title}” in the rotation${skipped}${cap}`,
       threadTs,
     );
   }
