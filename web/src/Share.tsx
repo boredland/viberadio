@@ -93,7 +93,7 @@ export function Share() {
               {phase.result.added.length === 0 &&
               ((phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists?.length ?? 0) > 0) &&
               (phase.result.playlists ?? []).every((p) => p.added === 0)
-                ? "ALREADY IN THE RADIO"
+                ? "ALREADY ON THE RADIO"
                 : "★ ADDED TO RADIO"}
             </p>
             <ul className="shared">
@@ -107,7 +107,7 @@ export function Share() {
             {phase.result.playlists?.map((p) => (
               <p key={p.id} className="dim">
                 {p.added === 0
-                  ? `“${p.title}”: every video is already in the radio`
+                  ? `“${p.title}”: every video is already on the radio`
                   : `${p.added} ${p.added === 1 ? "video" : "videos"} from “${p.title}”`}
                 {p.added > 0 && p.truncated ? ` (YouTube's feed lists at most ${MAX_PLAYLIST_VIDEOS} per playlist)` : ""}
               </p>

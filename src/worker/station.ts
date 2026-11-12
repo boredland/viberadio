@@ -5,7 +5,7 @@ import { extractVideoIds } from "../../shared/video";
 import { botTokenFor } from "./install";
 import { WEB_ADDER, resolveSlackName } from "./names";
 import { isUserMessage, slackApi, type SlackMessage } from "./slack";
-import { fetchVideoMeta, isNonMusic, lookupVideoCategories } from "./youtube";
+import { fetchVideoMeta, isNonMusic, lookupVideoCategories, type VideoCategory } from "./youtube";
 
 type StationState = {
   teamId: string;
@@ -58,6 +58,8 @@ const SEEN_CAP = 500;
 const MAX_ROWS_EXAMINED = 20;
 /** One videos.list call checks up to this many unchecked rows at once: 1 subrequest and 1 quota unit however many. */
 const CATEGORY_BATCH_ROWS = 50;
+/** When a batch is refused as a bad request, at most this many ids are asked one at a time to find the bad one. */
+const MAX_SPLIT_LOOKUPS = 12;
 /** Batched calls one track pick may spend. They share the 50-subrequest budget with the title and name lookups. */
 const MAX_CATEGORY_CALLS_PER_PICK = 3;
 /** After a call YouTube did not answer, unchecked rows play without a lookup for this long: one outage costs one timeout. */
@@ -573,6 +575,11 @@ export class Station extends DurableObject<Env> {
    * a big backfilled library is cleared a batch at a time instead of one subrequest per row. A non-music video is retired;
    * music is remembered; "answered, no category" (a deleted or private video) is remembered too, as final. A call YouTube
    * did not answer changes nothing and pauses lookups for CATEGORY_RETRY_MS.
+   *
+   * A batch refused as a bad request (HTTP 400: one id YouTube cannot parse fails the whole call) is split once: the picked
+   * row is asked alone, and so is every other id, up to MAX_SPLIT_LOOKUPS calls. An id that is refused even alone is the
+   * bad one, and is marked answered-without-category (music=2) so it can never be sent in a batch again. Without that, the
+   * same poisoned batch would be re-sent, and refused, on every pick.
    */
   private async checkCategories(videoId: string): Promise<void> {
     const sql = this.ctx.storage.sql;
@@ -584,21 +591,36 @@ export class Station extends DurableObject<Env> {
       )
       .toArray()
       .map((r) => r.video_id);
-    let lookup = await lookupVideoCategories(this.env, [videoId, ...others]);
-    // YouTube refused the whole batch as a bad request (one malformed id fails the call). Retry with just the picked row so one
-    // bad id cannot keep every row unchecked. Other failures (quota, 429, 5xx) would fail again, so they are not retried.
-    if (lookup.answered.size === 0 && lookup.badRequest && others.length > 0) lookup = await lookupVideoCategories(this.env, [videoId]);
-    const { categories, answered } = lookup;
-    if (answered.size === 0) {
+    const lookup = await lookupVideoCategories(this.env, [videoId, ...others]);
+    if (lookup.answered.size === 0 && lookup.badRequest && others.length > 0) {
+      const ids = [videoId, ...others].slice(0, MAX_SPLIT_LOOKUPS);
+      const singles = await Promise.all(ids.map((id) => lookupVideoCategories(this.env, [id])));
+      let anyAnswered = false;
+      singles.forEach((one, i) => {
+        if (one.answered.size > 0) {
+          anyAnswered = true;
+          this.recordCategory(ids[i], one.categories.get(ids[i]));
+        } else if (one.badRequest) {
+          // Refused even alone: this id is malformed as far as YouTube is concerned. It stays playable (fail open) but is
+          // marked final so it is never batched again.
+          sql.exec("UPDATE library SET music=2 WHERE video_id=? AND music IS NULL", ids[i]);
+        }
+      });
+      if (!anyAnswered && singles.every((one) => !one.badRequest)) this.categoryDownUntil = Date.now() + CATEGORY_RETRY_MS;
+      return;
+    }
+    if (lookup.answered.size === 0) {
       this.categoryDownUntil = Date.now() + CATEGORY_RETRY_MS;
       return;
     }
-    for (const id of answered) {
-      const category = categories.get(id);
-      // `AND music IS NULL`: only rows still unchecked, so a verdict that arrived while this call was in flight stands.
-      if (isNonMusic(category)) sql.exec("UPDATE library SET music=0, dead=1 WHERE video_id=? AND music IS NULL", id);
-      else sql.exec("UPDATE library SET music=? WHERE video_id=? AND music IS NULL", category ? 1 : 2, id);
-    }
+    for (const id of lookup.answered) this.recordCategory(id, lookup.categories.get(id));
+  }
+
+  /** Stores one video's verdict. `AND music IS NULL`: only rows still unchecked, so a verdict that arrived meanwhile stands. */
+  private recordCategory(id: string, category: VideoCategory | undefined): void {
+    const sql = this.ctx.storage.sql;
+    if (isNonMusic(category)) sql.exec("UPDATE library SET music=0, dead=1 WHERE video_id=? AND music IS NULL", id);
+    else sql.exec("UPDATE library SET music=? WHERE video_id=? AND music IS NULL", category ? 1 : 2, id);
   }
 
   // ---- Backfill -----------------------------------------------------------
