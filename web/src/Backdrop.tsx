@@ -1125,8 +1125,13 @@ function findMoon(w: number, h: number, hy: number, mr: number, portrait: boolea
     // The side gutters between the screen edge and the panels are a few pixels wide: a disc there is a sliver of rim, which
     // scores well on a point count and reads as nothing. So a candidate must keep its whole disc inside the panels' span.
     const spans = boxes.filter((b) => b.bottom > b.top && b.right - b.left > w * 0.5);
-    const left = spans.length ? Math.min(...spans.map((b) => b.left)) : 0;
-    const right = spans.length ? Math.max(...spans.map((b) => b.right)) : w;
+    const spanLeft = spans.length ? Math.min(...spans.map((b) => b.left)) : 0;
+    const spanRight = spans.length ? Math.max(...spans.map((b) => b.right)) : w;
+    // Only a stack that nearly fills the width leaves slivers at the edges. A centred rig on a wide screen has real open sky on
+    // both sides, so there the whole width stays available.
+    const nearlyFull = spanRight - spanLeft > w - 4 * mr;
+    const left = nearlyFull ? spanLeft : 0;
+    const right = nearlyFull ? spanRight : w;
     // The whole sky band: from just inside the top edge to where the disc would sit on the ridge. A moon half-hidden by the
     // ridge is allowed (it is rising), so the lower bound reaches below the ridge line by a third of its radius.
     const lo = mr * 1.1;
@@ -1149,7 +1154,8 @@ function findMoon(w: number, h: number, hy: number, mr: number, portrait: boolea
 
 /** The panel boxes and a signature of the layout: the viewport size and every box, so a fold or a resize is noticed cheaply. */
 function readLayout(w: number, h: number): { boxes: DOMRect[]; sig: string } {
-  const boxes = [...document.querySelectorAll(".win, .foot a")].map((e) => e.getBoundingClientRect());
+  // Panels only. The footer chip is small and the moon showing behind it reads fine, so it does not count as covering the sky.
+  const boxes = [...document.querySelectorAll(".win")].map((e) => e.getBoundingClientRect());
   const sig = `${w}x${h}|${boxes.map((b) => `${Math.round(b.left)},${Math.round(b.top)},${Math.round(b.right)},${Math.round(b.bottom)}`).join(";")}`;
   return { boxes, sig };
 }
