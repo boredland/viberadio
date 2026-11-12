@@ -1,6 +1,7 @@
 {
   "name": "viberadio",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite build -c web/vite.config.ts && wrangler dev",

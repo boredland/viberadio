@@ -17,3 +17,7 @@ Cloudflare Workers + SQLite-backed Durable Objects (`StationRegistry`, `Station`
 7. `npm run deploy` publishes to the `routes` entry in `wrangler.jsonc`.
 
 `/invite @viberadio` in a public channel posts the tune-in link; `/viberadio` re-shows it. In a workspace without an install, `/viberadio` points people at the landing page.
+
+## Licence
+
+MIT, see `LICENSE`.
