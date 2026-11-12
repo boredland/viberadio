@@ -22,6 +22,8 @@ type StationState = {
   refill?: { cursor: string | null; failures?: number };
   /** Set once the pass has finished (or was never owed: the station was created after attribution existed). */
   attributionDone?: boolean;
+  /** Set once rows retired under the old music rule have been put back for a re-check (see the constructor). */
+  musicRuleV2?: boolean;
   /** Ring buffer, cap SEEN_CAP. */
   seenEventIds: string[];
 };
@@ -121,6 +123,14 @@ export class Station extends DurableObject<Env> {
     }
     ctx.blockConcurrencyWhile(async () => {
       this.state = (await ctx.storage.get<StationState>("state")) ?? null;
+      // The music rule widened (a Music topic now counts), so rows the old rule retired are judged once more. Only rows with
+      // music=0 are touched: a video a person removed, or one oEmbed found unavailable, never has music=0 and stays dead.
+      // Without a YouTube key nothing could re-check them, so the reset waits (and the flag stays unset) until there is one.
+      if (this.state && !this.state.musicRuleV2 && env.YOUTUBE_API_KEY) {
+        ctx.storage.sql.exec("UPDATE library SET music=NULL, dead=0 WHERE music=0");
+        this.state.musicRuleV2 = true;
+        await ctx.storage.put("state", this.state);
+      }
       const s = this.state;
       // A station that already finished indexing re-reads the channel once to learn who posted each link. `refill` is
       // separate from `backfill` because `backfill.done` gates history rotation, and a complete station must keep playing
@@ -150,6 +160,7 @@ export class Station extends DurableObject<Env> {
       queue: [],
       backfill: { cursor: null, done: false, error: null },
       seenEventIds: [],
+      musicRuleV2: true,
     };
     await this.persist();
     await this.ctx.storage.setAlarm(Date.now());
