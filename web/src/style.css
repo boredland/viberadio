@@ -137,6 +137,22 @@ body::after {
 
 #root { width: 100%; }
 
+/* Sits on the backdrop, not on a panel, so the link gets its own panel to stay readable on every scene. */
+.foot { position: relative; z-index: 1; text-align: center; margin: 14px 0 0; }
+.foot a {
+  display: inline-block;
+  padding: 5px 10px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--accent-dim);
+  background: var(--panel);
+  border: 1px solid #000;
+  box-shadow: inset 1px 1px 0 var(--quiet-edge), inset -1px -1px 0 #000;
+  text-decoration: none;
+}
+.foot a:hover { color: var(--accent); }
+.foot a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .stack {
   position: relative;
   z-index: 1;

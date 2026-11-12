@@ -5,6 +5,8 @@ import { Share } from "./Share";
 import { Station } from "./Station";
 import { Backdrop } from "./Backdrop";
 
+const REPO_URL = "https://github.com/boredland/viberadio";
+
 /** Browsers report this on the window; it flips as the device loses and regains a connection. */
 function useOnline(): boolean {
   const [online, setOnline] = useState(navigator.onLine);
@@ -52,6 +54,11 @@ export function App() {
       ) : resume ? null : (
         <Landing online={online} />
       )}
+      <footer className="foot">
+        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+          SOURCE ON GITHUB ↗
+        </a>
+      </footer>
     </>
   );
 }
