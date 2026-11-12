@@ -90,13 +90,12 @@ export function Share() {
         ) : phase.kind === "done" ? (
           <>
             <p className="lcd-text">
-              {phase.result.added.length === 0 &&
-              ((phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists?.length ?? 0) > 0) &&
-              (phase.result.playlists ?? []).every((p) => p.added === 0) &&
-              // Skipped as not music is a different answer from already there, and the line under it says which.
-              (phase.result.playlists ?? []).every((p) => p.notMusic === 0)
-                ? "ALREADY ON THE RADIO"
-                : "★ ADDED TO RADIO"}
+              {phase.result.added.length > 0 || (phase.result.playlists ?? []).some((p) => p.added > 0)
+                ? "★ ADDED TO RADIO"
+                : // Nothing new went in. Already there, or skipped as not music: the lines below name which.
+                  (phase.result.alreadyQueued?.length ?? 0) > 0 || (phase.result.playlists ?? []).some((p) => p.notMusic === 0)
+                  ? "ALREADY ON THE RADIO"
+                  : "NOTHING ADDED"}
             </p>
             <ul className="shared">
               {phase.result.added.map((a) => (
