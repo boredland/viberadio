@@ -1,0 +1,16 @@
+[Unit]
+Description=viberadio client (shared Slack radio)
+After=pipewire-pulse.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/viberadio daemon
+Restart=on-failure
+RestartSec=5
+# mpv and yt-dlp are started by the client; a stop must take them down with it.
+KillMode=control-group
+
+[Install]
+# Not enabled by default: tune in with `viberadio start`.
+WantedBy=default.target

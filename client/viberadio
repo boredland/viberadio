@@ -1,0 +1,405 @@
+#!/usr/bin/env -S mise exec node@22 -- node
+// viberadio: a client for a viberadio station (https://github.com/boredland/viberadio), the shared radio of a
+// Slack channel. It joins the station the way the web page does (WebSocket, ping/pong clock offset, "ended" reports)
+// and plays the current track in mpv at the position everyone else is at.
+//
+//   viberadio setup <share link>   save the station (the link's token is a credential: stored mode 0600)
+//   viberadio start | stop | toggle  run the client as the systemd user service viberadio.service
+//   viberadio status [--json|--waybar]
+//   viberadio volume <0-130|+N|-N>   this computer only
+//   viberadio mute                   this computer only
+//   viberadio skip                   skips the track for EVERYONE on the station
+//   viberadio daemon                 what the service runs
+//
+// mpv plays YouTube through yt-dlp, which must be installed (~/.local/bin is searched too).
+import net from "node:net";
+import { spawn, execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const HOME = homedir();
+const dirs = () => ({
+  config: join(process.env.XDG_CONFIG_HOME || join(HOME, ".config"), "viberadio"),
+  state: join(process.env.XDG_STATE_HOME || join(HOME, ".local", "state"), "viberadio"),
+  run: process.env.XDG_RUNTIME_DIR || `/tmp/viberadio-${process.getuid()}`,
+});
+const ctlPath = () => join(dirs().run, "viberadio.sock");
+const mpvPath = () => join(dirs().run, "viberadio-mpv.sock");
+
+// The same numbers as the web client (web/src/sync.ts).
+const PING_MS = 30_000, PONG_DEADLINE_MS = 10_000, BACKOFF_MAX_MS = 30_000;
+const DRIFT_MS = 1000, QUIET_AFTER_SEEK_MS = 5000, QUIET_AFTER_START_MS = 1500, END_RETRY_MS = 5000;
+const LOAD_ATTEMPTS = 3, MAX_FAIL_STREAK = 3, DEFAULT_VOLUME = 40;
+const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+const log = (...a) => console.error(new Date().toISOString().slice(11, 19), ...a);
+const die = (msg, code = 1) => { console.error(`viberadio: ${msg}`); process.exit(code); };
+const readIf = (p) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
+
+// Never put the link or token in a message: it is the key to the station.
+function parseStation(raw) {
+  let u;
+  try { u = new URL(raw.trim()); } catch { return null; }
+  const m = u.pathname.match(/^\/s\/([^/]+)/);
+  if (!m || !/^https?:$/.test(u.protocol)) return null;
+  const token = decodeURIComponent(m[1]);
+  return {
+    api: `${u.origin}/api/station/${encodeURIComponent(token)}`,
+    ws: `${u.protocol === "https:" ? "wss" : "ws"}://${u.host}/ws?token=${encodeURIComponent(token)}`,
+  };
+}
+function station() {
+  const raw = process.env.VIBERADIO_STATION || readIf(join(dirs().config, "station"));
+  if (!raw.trim()) die("no station yet: run `viberadio setup <share link>`");
+  return parseStation(raw) ?? die("the saved station is not a station link (https://host/s/<token>)");
+}
+
+// ---- mpv ------------------------------------------------------------------------------------------------------
+class Mpv {
+  constructor(onEvent, onExit) { this.onEvent = onEvent; this.onExit = onExit; this.id = 0; this.waiting = new Map(); this.buf = ""; }
+
+  async start(volume) {
+    const sock = mpvPath();
+    rmSync(sock, { force: true });
+    this.proc = spawn("mpv", [
+      "--no-config", "--no-video", "--no-terminal", "--idle=yes", "--force-window=no", "--audio-display=no",
+      "--ytdl-format=bestaudio/best", `--volume=${volume}`, `--input-ipc-server=${sock}`,
+    ], { stdio: "ignore", env: { ...process.env, PATH: `${process.env.PATH}:${join(HOME, ".local", "bin")}` } });
+    this.proc.on("error", (e) => die(`cannot run mpv: ${e.message}`));
+    this.proc.on("exit", () => this.onExit());
+    for (let i = 0; i < 50 && !existsSync(sock); i++) await new Promise((r) => setTimeout(r, 100));
+    this.sock = net.connect(sock);
+    this.sock.on("data", (d) => this.data(d));
+    this.sock.on("close", () => { for (const w of this.waiting.values()) w({ error: "mpv closed" }); this.waiting.clear(); });
+    await new Promise((res, rej) => { this.sock.once("connect", res); this.sock.once("error", rej); });
+  }
+
+  data(d) {
+    this.buf += d;
+    let i;
+    while ((i = this.buf.indexOf("\n")) >= 0) {
+      const line = this.buf.slice(0, i);
+      this.buf = this.buf.slice(i + 1);
+      let m;
+      try { m = JSON.parse(line); } catch { continue; }
+      if (m.request_id !== undefined && this.waiting.has(m.request_id)) { this.waiting.get(m.request_id)(m); this.waiting.delete(m.request_id); }
+      else if (m.event) this.onEvent(m);
+    }
+  }
+
+  // Resolves with mpv's reply; rejects when mpv says the command failed.
+  cmd(...command) {
+    return new Promise((resolve, reject) => {
+      const id = ++this.id;
+      this.waiting.set(id, (m) => (m.error === "success" ? resolve(m.data) : reject(new Error(m.error))));
+      this.sock.write(JSON.stringify({ command, request_id: id }) + "\n");
+    });
+  }
+  get(prop) { return this.cmd("get_property", prop).catch(() => undefined); }
+  kill() { this.proc?.kill(); }
+}
+
+// ---- the station client ---------------------------------------------------------------------------------------
+class Radio {
+  constructor(st, mpv, volume) {
+    this.st = st; this.mpv = mpv; this.volume = volume; this.muted = false;
+    this.ws = null; this.connected = false; this.latest = null;
+    this.offset = 0; this.synced = false; this.backoff = 1000; this.lastRx = 0;
+    this.cur = null; this.drift = null; this.err = null; this.failStreak = 0; this.lastTick = Date.now();
+  }
+
+  serverNow() { return Date.now() + this.offset; }
+  targetS(startedAtMs) { return Math.max(0, (this.serverNow() - startedAtMs) / 1000); }
+  send(m) { if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m)); }
+
+  connect() {
+    clearTimeout(this.retryT);
+    const ws = (this.ws = new WebSocket(this.st.ws));
+    ws.onopen = () => {
+      if (this.ws !== ws) return;
+      this.backoff = 1000; this.lastRx = Date.now(); this.connected = true;
+      this.ping();
+      this.pingT = setInterval(() => this.ping(), PING_MS);
+      this.reportEnd();
+    };
+    ws.onmessage = (ev) => {
+      if (this.ws !== ws) return;
+      this.lastRx = Date.now();
+      if (typeof ev.data !== "string") return;
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === "pong") {
+        const sample = m.serverNow - (m.t0 + (Date.now() - m.t0) / 2);
+        this.offset = this.synced ? 0.8 * this.offset + 0.2 * sample : sample;
+        this.synced = true;
+        this.apply();
+      } else if (m.type === "state") {
+        this.latest = m;
+        this.apply();
+      }
+    };
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      clearInterval(this.pingT); clearTimeout(this.pongT);
+      this.connected = false;
+      this.retryT = setTimeout(() => this.connect(), this.backoff);
+      this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS);
+    };
+  }
+
+  ping() {
+    const t0 = Date.now();
+    this.send({ type: "ping", t0 });
+    clearTimeout(this.pongT);
+    // A socket that went quiet (laptop slept, network changed) never fires close: replace it.
+    this.pongT = setTimeout(() => { if (this.lastRx < t0) this.reconnect(); }, PONG_DEADLINE_MS);
+  }
+
+  reconnect() {
+    clearInterval(this.pingT); clearTimeout(this.pongT);
+    const old = this.ws;
+    this.ws = null; this.connected = false; this.backoff = 1000;
+    old?.close();
+    this.connect();
+  }
+
+  // What should be playing follows the station state; drift is handled by tick().
+  apply() {
+    const now = this.latest?.now ?? null;
+    if (!now) {
+      if (this.cur) { this.cur = null; this.mpv.cmd("stop").catch(() => {}); }
+      return;
+    }
+    if (!this.synced || this.cur?.id === now.id) return;
+    this.play(now, 0);
+  }
+
+  play(t, attempts) {
+    if (!VIDEO_ID.test(t.videoId)) { log("ignoring a track with a malformed video id"); return; }
+    const c = (this.cur = { id: t.id, videoId: t.videoId, title: t.title, started: t.startedAtMs, attempts, quietUntil: 0, ended: 0, playing: false });
+    this.err = null;
+    log("playing:", t.title);
+    this.mpv.cmd("loadfile", `https://www.youtube.com/watch?v=${t.videoId}`, "replace", -1, `start=${this.targetS(t.startedAtMs).toFixed(2)}`)
+      .then((r) => { c.entry = r?.playlist_entry_id; })
+      .catch((e) => log("loadfile failed:", e.message));
+  }
+
+  // mpv's events about the file loaded for this.cur. Events of a file we replaced carry another entry id.
+  onMpv(ev) {
+    const c = this.cur;
+    if (!c) return;
+    if (ev.event === "playback-restart" && !c.playing) {
+      c.playing = true;
+      c.quietUntil = Date.now() + QUIET_AFTER_START_MS;
+      this.failStreak = 0;
+    } else if (ev.event === "end-file" && ev.playlist_entry_id !== undefined && ev.playlist_entry_id === c.entry) {
+      if (ev.reason === "eof") { c.ended = Date.now(); this.reportEnd(); }
+      else if (ev.reason === "error") this.failed(c);
+    }
+  }
+
+  reportEnd() {
+    const c = this.cur;
+    if (!c?.ended) return;
+    c.lastReport = Date.now();
+    this.send({ type: "ended", id: c.id });
+  }
+
+  // A track this computer cannot play (yt-dlp, network) is retried. Reporting it would skip it for everyone, so that
+  // only happens when nobody else is listening, and not endlessly when playback is broken as a whole.
+  failed(c) {
+    this.failStreak++;
+    if (c.attempts < LOAD_ATTEMPTS - 1) {
+      const next = c.attempts + 1;
+      this.err = `retrying: ${c.title}`;
+      setTimeout(() => { if (this.cur === c) this.play({ id: c.id, videoId: c.videoId, title: c.title, startedAtMs: c.started }, next); }, 3000 * next);
+      return;
+    }
+    c.failed = true;
+    this.err = `cannot play: ${c.title}`;
+    log(this.err);
+    if ((this.latest?.listeners ?? 1) <= 1 && this.failStreak <= MAX_FAIL_STREAK * LOAD_ATTEMPTS) this.send({ type: "error", id: c.id, code: 0 });
+  }
+
+  async tick() {
+    const t = Date.now();
+    if (t - this.lastTick > 5000) this.reconnect(); // the process was suspended: the socket is stale
+    this.lastTick = t;
+    const c = this.cur;
+    if (!c || c.failed) return;
+    if (c.ended) { if (t - c.lastReport > END_RETRY_MS) this.reportEnd(); return; }
+    if (!c.playing) return;
+    const pos = await this.mpv.get("time-pos");
+    if (typeof pos !== "number" || this.cur !== c) return;
+    this.drift = pos * 1000 - (this.serverNow() - c.started);
+    if (Math.abs(this.drift) > DRIFT_MS && t >= c.quietUntil) {
+      c.quietUntil = t + QUIET_AFTER_SEEK_MS;
+      this.mpv.cmd("seek", this.targetS(c.started).toFixed(2), "absolute").catch(() => {});
+    }
+  }
+
+  async setVolume(spec) {
+    const n = /^[+-]/.test(spec) ? this.volume + Number(spec) : Number(spec);
+    if (!Number.isFinite(n) || spec === "") throw new Error("volume wants 0-130, +N or -N");
+    this.volume = Math.min(130, Math.max(0, Math.round(n)));
+    await this.mpv.cmd("set_property", "volume", this.volume);
+    mkdirSync(dirs().state, { recursive: true });
+    writeFileSync(join(dirs().state, "volume"), `${this.volume}\n`);
+  }
+
+  async toggleMute() {
+    this.muted = !this.muted;
+    await this.mpv.cmd("set_property", "mute", this.muted);
+  }
+
+  status() {
+    const n = this.latest?.now ?? null;
+    return {
+      connected: this.connected, synced: this.synced, listeners: this.latest?.listeners ?? null, queued: this.latest?.queue?.length ?? null,
+      volume: this.volume, muted: this.muted, driftMs: this.drift === null ? null : Math.round(this.drift), error: this.err,
+      now: n && { videoId: n.videoId, title: n.title, author: n.author, addedBy: n.addedBy ?? null, playing: Boolean(this.cur?.playing) },
+    };
+  }
+}
+
+async function daemon() {
+  const d = dirs();
+  mkdirSync(d.run, { recursive: true, mode: 0o700 });
+  if (await rpc({ cmd: "status" }).catch(() => null)) die("already running");
+  const st = station();
+  const saved = Number(readIf(join(d.state, "volume")));
+  const volume = readIf(join(d.state, "volume")).trim() !== "" && Number.isFinite(saved) ? saved : DEFAULT_VOLUME;
+
+  let radio;
+  const mpv = new Mpv((ev) => radio?.onMpv(ev), () => { log("mpv exited"); cleanup(1); });
+  const cleanup = (code) => { rmSync(ctlPath(), { force: true }); rmSync(mpvPath(), { force: true }); mpv.kill(); process.exit(code); };
+  await mpv.start(volume);
+  radio = new Radio(st, mpv, volume);
+
+  rmSync(ctlPath(), { force: true });
+  net.createServer((c) => {
+    let buf = "";
+    c.on("error", () => {});
+    c.on("data", async (data) => {
+      buf += data;
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      let req;
+      try { req = JSON.parse(buf.slice(0, i)); } catch { return c.end(JSON.stringify({ error: "bad request" }) + "\n"); }
+      buf = "";
+      let out = { ok: true };
+      try {
+        if (req.cmd === "volume") await radio.setVolume(String(req.value ?? ""));
+        else if (req.cmd === "mute") await radio.toggleMute();
+        else if (req.cmd === "skip") radio.send({ type: "next" });
+        else if (req.cmd === "quit") { c.end(JSON.stringify(out) + "\n", () => cleanup(0)); return; }
+        else if (req.cmd !== "status") out = { error: "unknown command" };
+        if (!out.error) out = { ok: true, status: radio.status() };
+      } catch (e) { out = { error: e.message }; }
+      c.end(JSON.stringify(out) + "\n");
+    });
+  }).listen(ctlPath(), () => chmodSync(ctlPath(), 0o600));
+
+  radio.connect();
+  setInterval(() => radio.tick().catch((e) => log("tick:", e.message)), 1000);
+  for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => cleanup(0));
+  log("tuned in");
+}
+
+// ---- command line ---------------------------------------------------------------------------------------------
+// null when no daemon answers.
+function rpc(req, timeoutMs = 3000) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(ctlPath());
+    let buf = "";
+    const t = setTimeout(() => { s.destroy(); reject(new Error("the client did not answer")); }, timeoutMs);
+    s.on("connect", () => s.write(JSON.stringify(req) + "\n"));
+    s.on("data", (d) => {
+      buf += d;
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      clearTimeout(t); s.end();
+      try { resolve(JSON.parse(buf.slice(0, i))); } catch (e) { reject(e); }
+    });
+    s.on("error", (e) => { clearTimeout(t); ["ENOENT", "ECONNREFUSED"].includes(e.code) ? resolve(null) : reject(e); });
+  });
+}
+
+// Waybar renders `text` and `tooltip` as Pango markup, and titles come from other people.
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const MUSIC = "\uf001", MUTED = "\u{f0581}";
+
+function waybar(s) {
+  if (!s) return { text: MUSIC, class: "off", tooltip: "viberadio is off\n\nclick: tune in" };
+  const help = ["", "click: stop", "middle-click: mute (this computer)", "scroll: volume", "right-click: refresh"];
+  const lines = [];
+  let text = MUSIC, cls = "idle";
+  if (s.now) {
+    cls = s.muted ? "muted" : "playing";
+    text = `${s.muted ? MUTED : MUSIC} ${clip(s.now.title ?? "", 22)}`;
+    lines.push(s.now.title ?? "", [s.now.author, s.now.addedBy && `added by ${s.now.addedBy}`].filter(Boolean).join(" · "));
+  } else lines.push(s.connected ? "nothing is playing" : "connecting…");
+  if (!s.connected) { cls = "offline"; lines.push("not connected, retrying"); }
+  if (s.error) { cls = "error"; lines.push(s.error); }
+  const sync = s.driftMs === null ? "" : Math.abs(s.driftMs) <= 1000 ? ` · in sync (${s.driftMs >= 0 ? "+" : ""}${s.driftMs} ms)` : ` · ${s.driftMs} ms off`;
+  lines.push(`${s.listeners ?? "?"} listening · volume ${s.volume}%${s.muted ? " (muted)" : ""}${sync}`);
+  return { text: esc(text), class: cls, tooltip: esc([...lines.filter(Boolean), ...help].join("\n")) };
+}
+
+const systemctl = (...a) => execFileSync("systemctl", ["--user", ...a], { stdio: ["ignore", "pipe", "pipe"] }).toString();
+const isActive = () => { try { systemctl("is-active", "--quiet", "viberadio.service"); return true; } catch { return false; } };
+
+async function waitFor(fn, ms) {
+  for (const end = Date.now() + ms; Date.now() < end; ) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 200)); }
+  return false;
+}
+
+async function main() {
+  const [cmd, ...args] = process.argv.slice(2);
+  switch (cmd) {
+    case "daemon": return daemon();
+    case "setup": {
+      const st = parseStation(args[0] ?? "");
+      if (!st) die("usage: viberadio setup <share link>   (https://host/s/<token>)");
+      const r = await fetch(st.api, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      if (!r?.ok) die(`the station did not answer${r ? ` (HTTP ${r.status})` : ""}: is the link current?`);
+      const d = dirs();
+      mkdirSync(d.config, { recursive: true, mode: 0o700 });
+      const file = join(d.config, "station");
+      writeFileSync(file, args[0].trim() + "\n", { mode: 0o600 });
+      chmodSync(file, 0o600);
+      console.log(`saved the station to ${file} (mode 600)`);
+      return;
+    }
+    case "start": case "stop": case "toggle": {
+      const want = cmd === "toggle" ? (isActive() ? "stop" : "start") : cmd;
+      try { systemctl(want, "viberadio.service"); } catch (e) { die(`systemctl ${want} failed: ${e.stderr?.toString().trim() || e.message}`); }
+      if (want === "start" && !(await waitFor(async () => (await rpc({ cmd: "status" }).catch(() => null)) !== null, 8000))) die("started, but the client did not come up: journalctl --user -u viberadio");
+      return;
+    }
+    case "status": {
+      const r = await rpc({ cmd: "status" }).catch((e) => die(e.message));
+      const s = r?.status ?? null;
+      if (args.includes("--waybar")) return console.log(JSON.stringify(waybar(s)));
+      if (args.includes("--json")) return console.log(JSON.stringify(s));
+      if (!s) return console.log("viberadio is off");
+      console.log(s.now ? `${s.now.title} · ${s.now.author ?? ""}` : "nothing is playing");
+      console.log(`${s.connected ? "connected" : "not connected"} · ${s.listeners ?? "?"} listening · volume ${s.volume}%${s.muted ? " (muted)" : ""}${s.driftMs === null ? "" : ` · drift ${s.driftMs} ms`}`);
+      if (s.error) console.log(s.error);
+      return;
+    }
+    case "volume": case "mute": case "skip": {
+      const r = await rpc({ cmd, value: args[0] }).catch((e) => die(e.message));
+      if (!r) die("viberadio is off", 3);
+      if (r.error) die(r.error);
+      return;
+    }
+    default:
+      die("usage: viberadio setup|start|stop|toggle|status|volume|mute|skip|daemon", 2);
+  }
+}
+
+main();

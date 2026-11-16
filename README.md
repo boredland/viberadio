@@ -18,6 +18,24 @@ Cloudflare Workers + SQLite-backed Durable Objects (`StationRegistry`, `Station`
 
 `/invite @viberadio` in a public channel posts the tune-in link; `/viberadio` re-shows it. In a workspace without an install, `/viberadio` points people at the landing page.
 
+## Desktop client and Herdr panel
+
+`client/viberadio` joins a station from a Linux desktop the way the web page does (WebSocket, ping/pong clock offset, `ended` reports) and plays it in mpv at the position everyone else is at. Playback is a systemd user service; the commands only talk to it.
+
+Needs `node` 22+ (`WebSocket` is built in), `mpv` and `yt-dlp`.
+
+```sh
+install -m 755 client/viberadio ~/.local/bin/viberadio
+install -Dm 644 client/viberadio.service ~/.config/systemd/user/viberadio.service
+systemctl --user daemon-reload
+viberadio setup 'https://<host>/s/<token>'   # the link is a credential: saved to ~/.config/viberadio/station, mode 600
+viberadio start
+```
+
+`viberadio status [--json|--waybar]`, `stop`, `toggle`, `volume <0-130|+N|-N>`, `mute`, `skip`. Volume and mute only touch this computer; **`skip` skips the track for everyone on the station**, as in the web page. A track this computer cannot play is retried and only reported to the station when nobody else is listening. The shebang runs node through `mise exec node@22`; change the first line if you get node another way.
+
+`herdr/mods/viberadio` is a popup for the [Herdr](https://herdr.dev) app that drives the same commands: now playing, listeners, sync offset, tune in or out, mute, volume, and a two-click skip. Copy the folder to `~/.config/herdr-app/mods/` and bind it in `~/.config/herdr-app/keys.json` (see `herdr/keys.json`: `ctrl-shift-r`).
+
 ## Licence
 
 MIT, see `LICENSE`.
